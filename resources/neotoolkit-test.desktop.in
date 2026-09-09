@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NeoToolKit Test
+Comment=NeoTools game resource workspace
+Exec=NeoToolKit-Test %F
+Icon=neotoolkit-test
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

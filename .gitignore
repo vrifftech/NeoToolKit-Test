@@ -1,0 +1,12 @@
+/build/
+/out/
+/.vs/
+CMakeUserPresets.json
+*.user
+.DS_Store
+
+# Generated CI source lock and local packaging
+ci-resolved-components.json
+.ci-logs/
+stage*/
+dist/

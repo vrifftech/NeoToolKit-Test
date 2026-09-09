@@ -1,0 +1,154 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "key": "NEOSHARED",
+      "folder": "neoshared",
+      "repository": "https://github.com/vrifftech/neoshared.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "wx/NeoModulePanel.hpp",
+          "contains": "validateOutput"
+        },
+        {
+          "file": "include/neoshared/GffResourceDocument.hpp"
+        },
+        {
+          "file": "include/neoshared/erf/Archive.hpp",
+          "contains": "read_current_resource"
+        },
+        {
+          "file": "scripts/package-macos-app.sh",
+          "contains": "is_macho_file"
+        },
+        {
+          "file": "scripts/install-wxwidgets.ps1"
+        }
+      ]
+    },
+    {
+      "key": "NEOBIF",
+      "folder": "NeoBIF",
+      "repository": "https://github.com/vrifftech/NeoBIF.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/BrowserPanel.hpp",
+          "contains": "BrowserPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEO2DA",
+      "folder": "Neo2DA",
+      "repository": "https://github.com/vrifftech/Neo2DA.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/EditorPanel.hpp",
+          "contains": "EditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOSSF",
+      "folder": "NeoSSF",
+      "repository": "https://github.com/vrifftech/NeoSSF.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/SSFEditorPanel.hpp",
+          "contains": "SSFEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOTLK",
+      "folder": "NeoTLK",
+      "repository": "https://github.com/vrifftech/NeoTLK.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/TLKEditorPanel.hpp",
+          "contains": "TLKEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOGFF",
+      "folder": "NeoGFF",
+      "repository": "https://github.com/vrifftech/NeoGFF.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/GFFEditorPanel.hpp",
+          "contains": "GFFEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEODLG",
+      "folder": "NeoDLG",
+      "repository": "https://github.com/vrifftech/NeoDLG.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/DLGEditorPanel.hpp",
+          "contains": "DLGEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOJRL",
+      "folder": "NeoJRL",
+      "repository": "https://github.com/vrifftech/NeoJRL.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/JRLEditorPanel.hpp",
+          "contains": "JRLEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOERF",
+      "folder": "NeoERF",
+      "repository": "https://github.com/vrifftech/NeoERF.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/ERFEditorPanel.hpp",
+          "contains": "ERFEditorPanel"
+        }
+      ]
+    }
+  ]
+}
