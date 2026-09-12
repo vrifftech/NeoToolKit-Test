@@ -36,7 +36,10 @@ jobs:
           persist-credentials: false
       - name: Fetch latest main branches and archive exact sources
         id: resolve
-        run: node NeoToolKit-Test/scripts/ci/resolve-components.mjs --workspace "$GITHUB_WORKSPACE"
+        shell: bash
+        run: >-
+          cmake "-DNEO_CI_WORKSPACE=$GITHUB_WORKSPACE"
+          -P NeoToolKit-Test/scripts/ci/PrepareSources.cmake
       - name: Upload exact source snapshot
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -126,12 +129,30 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & ./neoshared/scripts/install-wxwidgets.ps1 -VcpkgRoot $env:VCPKG_INSTALLATION_ROOT -Triplet x64-windows-static -CleanAfterBuild
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Configure workspace application
-        run: node NeoToolKit-Test/scripts/ci/run-native.mjs --phase configure
-      - name: Compile the workspace application and modules
-        run: node NeoToolKit-Test/scripts/ci/run-native.mjs --phase build
-      - name: Package application
-        run: node NeoToolKit-Test/scripts/ci/run-native.mjs --phase package
+      - name: Configure workspace application (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash NeoToolKit-Test/scripts/build.sh --ci-phase configure
+      - name: Configure workspace application (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./NeoToolKit-Test/scripts/build.ps1 -CiPhase configure
+      - name: Compile workspace application and modules (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash NeoToolKit-Test/scripts/build.sh --ci-phase build
+      - name: Compile workspace application and modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./NeoToolKit-Test/scripts/build.ps1 -CiPhase build
+      - name: Package application (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash NeoToolKit-Test/scripts/build.sh --ci-phase package
+      - name: Package application (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./NeoToolKit-Test/scripts/build.ps1 -CiPhase package
       - name: Upload application packages and checksums
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
