@@ -1,5 +1,6 @@
 #include "WorkspaceFrame.hpp"
 #include "NeoViewState.hpp"
+#include <neoshared/PathUtf8.hpp>
 #include <wx/dnd.h>
 #include <wx/menu.h>
 #include <algorithm>
@@ -218,7 +219,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
 }
 void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::string& editor) {
     try {
-        auto ext=path.extension().u8string();std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+        auto ext=neoshared::pathToUtf8(path.extension());std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
         std::error_code ec;
         if(std::filesystem::is_directory(path,ec)||ext==".key") {
             if(!editor.empty())throw std::runtime_error("Choose a resource inside the game browser, not an editor for a KEY/directory.");
