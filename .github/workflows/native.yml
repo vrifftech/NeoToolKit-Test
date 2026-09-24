@@ -96,11 +96,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            build-essential cmake ninja-build pkg-config libwxgtk3.2-dev zlib1g-dev \
+            build-essential cmake ninja-build pkg-config libwxgtk3.2-dev zlib1g-dev libspng-dev libjpeg-dev \
             dpkg-dev fakeroot binutils
       - name: Install macOS SDK
         if: runner.os == 'macOS'
-        run: brew install wxwidgets ninja
+        run: brew install wxwidgets ninja libspng jpeg-turbo
       - name: Prepare supported vcpkg file cache
         if: runner.os == 'Windows'
         id: vcpkg
@@ -128,6 +128,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           & ./neoshared/scripts/install-wxwidgets.ps1 -VcpkgRoot $env:VCPKG_INSTALLATION_ROOT -Triplet x64-windows-static -CleanAfterBuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install NeoTPC codec dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install libspng:x64-windows-static libjpeg-turbo:x64-windows-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Configure workspace application (Linux/macOS)
         if: runner.os != 'Windows'

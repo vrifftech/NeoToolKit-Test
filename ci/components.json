@@ -136,6 +136,21 @@
       ]
     },
     {
+      "key": "NEOTPC",
+      "folder": "NeoTPC",
+      "repository": "https://github.com/vrifftech/NeoTPC.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/TextureEditorPanel.hpp",
+          "contains": "TextureEditorPanel"
+        }
+      ]
+    },
+    {
       "key": "NEOERF",
       "folder": "NeoERF",
       "repository": "https://github.com/vrifftech/NeoERF.git",

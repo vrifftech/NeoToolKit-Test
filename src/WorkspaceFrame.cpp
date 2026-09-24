@@ -26,7 +26,7 @@ void stripAccelerators(wxMenu& menu) {
     }
 }
 }
-std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,archives_};}
+std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,textures_,archives_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 2, "Update NeoShared: hosted output guard API required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -45,6 +45,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     structured_=neogff::ui::createEditorPanel(editors_,context);
     dialogues_=neodlg::ui::createEditorPanel(editors_,context);
     journals_=neojrl::ui::createEditorPanel(editors_,context);
+    textures_=neotpc::ui::createEditorPanel(editors_,context);
     archives_=neoerf::ui::createEditorPanel(editors_,context);
     editors_->AddPage(tables_,"2DA tables",true);
     editors_->AddPage(soundsets_,"Soundsets");
@@ -52,6 +53,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     editors_->AddPage(structured_,"GFF resources");
     editors_->AddPage(dialogues_,"Dialogues");
     editors_->AddPage(journals_,"Journals");
+    editors_->AddPage(textures_,"Textures");
     editors_->AddPage(archives_,"Archives");
     archives_->setMemberOpenHandler({[](std::uint16_t type){
         std::vector<neoerf::ui::MemberOpenTarget> result;
@@ -110,7 +112,7 @@ WorkspaceFrame::~WorkspaceFrame() {
     // Destroy panels before either attached or inactive menus: game-menu helpers
     // unbind their handlers during the panel's destruction.
     menusReady_=false;
-    DestroyChildren();browser_=nullptr;tables_=nullptr;soundsets_=nullptr;talkTables_=nullptr;structured_=nullptr;dialogues_=nullptr;journals_=nullptr;archives_=nullptr;
+    DestroyChildren();browser_=nullptr;tables_=nullptr;soundsets_=nullptr;talkTables_=nullptr;structured_=nullptr;dialogues_=nullptr;journals_=nullptr;textures_=nullptr;archives_=nullptr;
 }
 void WorkspaceFrame::buildMenus() {
     auto* bar=new wxMenuBar;
@@ -131,7 +133,7 @@ void WorkspaceFrame::buildMenus() {
         while(module && module->GetMenuCount()) {
             auto label=module->GetMenuLabel(0);label.Replace("&","");
             if(label=="File") {
-                static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Archive"};
+                static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Texture","Archive"};
                 label=titles[i];
             }
             auto* menu=module->Remove(0);
@@ -154,11 +156,11 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
-            "Resources (archives, KEY, tables, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
+            "Resources (archives, KEY, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
         if(path)openPath(*path);
     },ID_Open);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){wxMessageBox(
-        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL and NeoERF panels.\n"
+        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL, NeoTPC and NeoERF panels.\n"
         "Archive members are editable snapshots. Save As creates working files, not archive modifications.\n\n"
         "Standalone archives open in the integrated NeoERF editor.","About NeoToolKit Test",wxOK|wxICON_INFORMATION,this);},ID_About);
     Bind(wxEVT_MENU,[this](wxCommandEvent& event){dark_=event.IsChecked();wxui::writeDarkMode("NeoToolKit-Test",dark_);applyAppearance();},ID_Dark);
@@ -209,6 +211,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
+    case EditorKind::Textures:ok=textures_->openResource(std::move(resource));break;
     case EditorKind::Archives:ok=archives_->openResource(std::move(resource));break;
     }
     if(ok) {
@@ -226,7 +229,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
             browser_->openPath(path);return;
         }
         const auto choices=editorsForExtension(ext);
-        if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, table, soundset, talk table, or GFF-backed resource.");
+        if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, table, texture, soundset, talk table, or GFF-backed resource.");
         const auto selected=selectResourceEditor(choices,editor);
         bool ok=false;
         switch(selected) {
@@ -236,6 +239,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
         case EditorKind::Gff:ok=structured_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
+        case EditorKind::Textures:ok=textures_->openFile(path);break;
         case EditorKind::Archives: {
             auto sources=browser_->sourcePaths();sources.insert(sources.end(),protectedInputs_.begin(),protectedInputs_.end());
             const bool gameSource=std::any_of(sources.begin(),sources.end(),[&](const auto& input){return neoshared::sameResourcePath(path,input);});
