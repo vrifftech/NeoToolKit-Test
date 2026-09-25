@@ -25,13 +25,17 @@ void stripAccelerators(wxMenu& menu) {
         if(item->GetSubMenu())stripAccelerators(*item->GetSubMenu());
     }
 }
+constexpr const char* kEditorPageTitles[kEditorCount]={
+    "2DA tables","Soundsets","Talk tables","GFF resources",
+    "Dialogues","Journals","Textures","Archives"
+};
 }
 std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,textures_,archives_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 2, "Update NeoShared: hosted output guard API required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
     neomodules::Context browserContext;
-    browserContext.embedded=true;browserContext.compact=true;
+    browserContext.embedded=true;browserContext.compact=false;
     browserContext.closeRequested=[this]{Close();};
     browserContext.titleChanged=[this](const wxString& title){SetTitle("NeoToolKit Test - "+title);};
     browser_=neobif::ui::createBrowserPanel(splitter_,std::move(browserContext));
@@ -47,14 +51,8 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     journals_=neojrl::ui::createEditorPanel(editors_,context);
     textures_=neotpc::ui::createEditorPanel(editors_,context);
     archives_=neoerf::ui::createEditorPanel(editors_,context);
-    editors_->AddPage(tables_,"2DA tables",true);
-    editors_->AddPage(soundsets_,"Soundsets");
-    editors_->AddPage(talkTables_,"Talk tables");
-    editors_->AddPage(structured_,"GFF resources");
-    editors_->AddPage(dialogues_,"Dialogues");
-    editors_->AddPage(journals_,"Journals");
-    editors_->AddPage(textures_,"Textures");
-    editors_->AddPage(archives_,"Archives");
+    for(auto* panel:panels())panel->Hide();
+    editors_->Hide();
     archives_->setMemberOpenHandler({[](std::uint16_t type){
         std::vector<neoerf::ui::MemberOpenTarget> result;
         for(const auto& choice:editorsForType(type))result.push_back({choice.id,choice.label});
@@ -80,26 +78,34 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
         },
         [this](neoshared::ResourceDocument resource,const std::string& editor){openResource(std::move(resource),editor);}});
     splitter_->SetMinimumPaneSize(FromDIP(260));
-    splitter_->SplitVertically(browser_,editors_,FromDIP(420));splitter_->SetSashGravity(0.0);
+    splitter_->Initialize(browser_);
     auto* layout=new wxBoxSizer(wxVERTICAL);layout->Add(splitter_,1,wxEXPAND);SetSizer(layout);
     buildMenus();
     editors_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
-        if(event.GetEventObject()==editors_ && event.GetSelection()>=0)switchMenus(static_cast<std::size_t>(event.GetSelection()));
+        if(event.GetEventObject()==editors_ && event.GetSelection()>=0) {
+            const auto index=editorForPage(event.GetSelection());
+            if(index<kEditorCount)switchMenus(index);
+        }
         event.Skip();
     });
     Bind(wxEVT_MENU,[this](wxCommandEvent& event){
-        auto list=panels();
-        if(!neomodules::routeCommand({browser_,list.at(activeEditor_)},event))event.Skip();
+        std::vector<neomodules::Panel*> targets{browser_};
+        if(activeEditor_<kEditorCount)targets.push_back(panels().at(activeEditor_));
+        if(!neomodules::routeCommand(targets,event))event.Skip();
     });
     Bind(wxEVT_MENU_OPEN,[this](wxMenuEvent& event){
-        auto list=panels();neomodules::routeMenuOpen({browser_,list.at(activeEditor_)},event);event.Skip();
+        std::vector<neomodules::Panel*> targets{browser_};
+        if(activeEditor_<kEditorCount)targets.push_back(panels().at(activeEditor_));
+        neomodules::routeMenuOpen(targets,event);event.Skip();
     });
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){
         if(!browser_->canClose()) {if(event.CanVeto()){event.Veto();return;}}
         const auto list=panels();
         for(std::size_t i=0;i<list.size();++i) {
-            selectEditor(i);
-            if(!list[i]->canClose()){if(event.CanVeto()){event.Veto();return;}}
+            if(!list[i]->canClose()){
+                selectEditor(i);
+                if(event.CanVeto()){event.Veto();return;}
+            }
         }
         settings_.saveWindowPlacement(*this);event.Skip();
     });
@@ -152,7 +158,8 @@ void WorkspaceFrame::buildMenus() {
     workspace->Append(ID_FontSmaller,"Decrease font size\tCtrl+-");
     workspace->Append(ID_FontReset,"Reset font size\tCtrl+0");
     workspace->AppendSeparator();workspace->Append(ID_About,"About NeoToolKit Test");
-    bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;switchMenus(0);
+    bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;
+    bar->Enable(ID_ToggleExplorer,false);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
@@ -167,23 +174,76 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontLarger);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,-1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontSmaller);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::kDefaultFontScale;settings_.setFontScale(fontScale_);applyAppearance();},ID_FontReset);
-    Bind(wxEVT_MENU,[this](wxCommandEvent& event){
-        if(event.IsChecked()) {if(!splitter_->IsSplit()){browser_->Show();splitter_->SplitVertically(browser_,editors_,FromDIP(420));}}
-        else if(splitter_->IsSplit()){splitter_->Unsplit(browser_);browser_->Hide();}
-        Layout();
-    },ID_ToggleExplorer);
+    Bind(wxEVT_MENU,[this](wxCommandEvent& event){setExplorerVisible(event.IsChecked());},ID_ToggleExplorer);
 }
 void WorkspaceFrame::switchMenus(std::size_t index) {
-    if(!menusReady_ || index>=menus_.size())return;
+    if(!menusReady_ || index>=menus_.size() || index==activeEditor_)return;
     auto* bar=GetMenuBar();
-    for(std::size_t i=0;i<attachedMenuCount_;++i)menus_[activeEditor_][i].menu.reset(bar->Remove(2));
+    if(activeEditor_<kEditorCount) {
+        for(std::size_t i=0;i<attachedMenuCount_;++i)menus_[activeEditor_][i].menu.reset(bar->Remove(2));
+    }
     activeEditor_=index;
     for(std::size_t i=0;i<menus_[index].size();++i)bar->Insert(2+i,menus_[index][i].menu.release(),menus_[index][i].title);
     attachedMenuCount_=menus_[index].size();bar->Refresh();
 }
+neomodules::Panel* WorkspaceFrame::panelFor(EditorKind kind) const {
+    return panels().at(static_cast<std::size_t>(kind));
+}
+int WorkspaceFrame::editorPage(EditorKind kind) const {
+    const auto* panel=panelFor(kind);
+    for(std::size_t i=0;i<editors_->GetPageCount();++i)
+        if(editors_->GetPage(i)==panel)return static_cast<int>(i);
+    return wxNOT_FOUND;
+}
+std::size_t WorkspaceFrame::editorForPage(int page) const {
+    if(page<0 || static_cast<std::size_t>(page)>=editors_->GetPageCount())return kEditorCount;
+    const auto* selected=editors_->GetPage(static_cast<std::size_t>(page));
+    const auto list=panels();
+    for(std::size_t i=0;i<list.size();++i)if(list[i]==selected)return i;
+    return kEditorCount;
+}
+void WorkspaceFrame::showEditor(EditorKind kind) {
+    const auto index=static_cast<std::size_t>(kind);
+    auto page=editorPage(kind);
+    if(page==wxNOT_FOUND) {
+        auto* panel=panelFor(kind);
+        panel->Show();
+        editors_->AddPage(panel,wxString::FromUTF8(kEditorPageTitles[index]),false);
+        page=editorPage(kind);
+    }
+    editors_->Show();
+    auto* bar=GetMenuBar();
+    if(bar)bar->Enable(ID_ToggleExplorer,true);
+    if(!splitter_->IsSplit() && browser_->IsShown()) {
+        splitter_->SplitVertically(browser_,editors_,FromDIP(520));
+        splitter_->SetSashGravity(0.0);
+    }
+    if(page!=wxNOT_FOUND)editors_->ChangeSelection(page);
+    switchMenus(index);
+    Layout();
+}
+void WorkspaceFrame::setExplorerVisible(bool visible) {
+    auto* bar=GetMenuBar();
+    if(activeEditor_>=kEditorCount) {
+        if(bar)bar->Check(ID_ToggleExplorer,true);
+        return;
+    }
+    if(visible) {
+        browser_->Show();editors_->Show();
+        if(!splitter_->IsSplit()) {
+            splitter_->SplitVertically(browser_,editors_,FromDIP(520));
+            splitter_->SetSashGravity(0.0);
+        }
+    } else {
+        if(splitter_->IsSplit())splitter_->Unsplit(browser_);
+        browser_->Hide();editors_->Show();
+    }
+    if(bar)bar->Check(ID_ToggleExplorer,visible);
+    Layout();
+}
 void WorkspaceFrame::selectEditor(std::size_t index) {
     if(index>=kEditorCount)return;
-    editors_->ChangeSelection(static_cast<int>(index));switchMenus(index);
+    showEditor(static_cast<EditorKind>(index));
 }
 void WorkspaceFrame::applyAppearance() {
     wxui::applyTheme(this,dark_);browser_->setAppearance(dark_,fontScale_);

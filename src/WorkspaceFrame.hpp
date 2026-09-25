@@ -38,6 +38,11 @@ private:
     struct Menu {wxString title;std::unique_ptr<wxMenu> menu;};
     void buildMenus();
     void switchMenus(std::size_t index);
+    void showEditor(EditorKind kind);
+    void setExplorerVisible(bool visible);
+    neomodules::Panel* panelFor(EditorKind kind) const;
+    int editorPage(EditorKind kind) const;
+    std::size_t editorForPage(int page) const;
     void applyAppearance();
     void checkOutput(const std::filesystem::path& path,const neomodules::Panel* owner) const;
     std::vector<neomodules::Panel*> panels() const;
@@ -53,7 +58,7 @@ private:
     wxSplitterWindow* splitter_{};
     wxNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;
-    std::size_t activeEditor_=0;
+    std::size_t activeEditor_=kEditorCount;
     std::size_t attachedMenuCount_=0;
     bool menusReady_=false;
     std::vector<std::filesystem::path> protectedInputs_;
