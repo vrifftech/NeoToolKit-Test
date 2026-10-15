@@ -27,12 +27,27 @@ void stripAccelerators(wxMenu& menu) {
 }
 constexpr const char* kEditorPageTitles[kEditorCount]={
     "2DA tables","Soundsets","Talk tables","GFF resources",
-    "Dialogues","Journals","Textures","Archives"
+    "Dialogues","Journals","Models","Textures","Archives"
 };
+std::string resourceExtension(const neoshared::ResourceDocument& resource) {
+    return std::filesystem::path(resource.fileName).extension().string();
 }
-std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,textures_,archives_};}
+std::vector<EditorChoice> editorsForResource(const neoshared::ResourceDocument& resource) {
+    const std::string extension = resourceExtension(resource);
+    return extension.empty() ? editorsForType(resource.type)
+                             : editorsForExtension(extension);
+}
+void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
+    const std::string extension = resourceExtension(resource);
+    if (const auto canonical = neoshared::bif::resourceTypeFromExtension(
+            extension, neoshared::bif::GameProfile::KotOR)) {
+        resource.type = *canonical;
+    }
+}
+}
+std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
-    static_assert(neomodules::kPanelApiVersion >= 2, "Update NeoShared: hosted output guard API required");
+    static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
     neomodules::Context browserContext;
     browserContext.embedded=true;browserContext.compact=false;
@@ -50,7 +65,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
             selectEditor(static_cast<std::size_t>(EditorKind::Archives));
         }
     });
-    static_assert(neobif::ui::kBrowserApiVersion>=3,"Update NeoBIF: explicit Open-with routing required");
+    static_assert(neobif::ui::kBrowserApiVersion>=6,"Update NeoBIF: owned resource resolver snapshots required");
     browser_->setOpenHandler({[](std::uint16_t type){return !editorsForType(type).empty();},
         [this](neoshared::ResourceDocument resource){openResource(std::move(resource));},
         [](std::uint16_t type){
@@ -58,7 +73,13 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
             for(const auto& choice:editorsForType(type))result.push_back({choice.id,choice.label});
             return result;
         },
-        [this](neoshared::ResourceDocument resource,const std::string& editor){openResource(std::move(resource),editor);}});
+        [this](neoshared::ResourceDocument resource,const std::string& editor){openResource(std::move(resource),editor);},
+        [](const std::string& extension){return !editorsForExtension(extension).empty();},
+        [](const std::string& extension){
+            std::vector<neobif::ui::OpenTarget> result;
+            for(const auto& choice:editorsForExtension(extension))result.push_back({choice.id,choice.label});
+            return result;
+        }});
     splitter_->SetMinimumPaneSize(FromDIP(260));
     splitter_->Initialize(browser_);
     auto* layout=new wxBoxSizer(wxVERTICAL);layout->Add(splitter_,1,wxEXPAND);SetSizer(layout);
@@ -85,12 +106,13 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
         neomodules::routeMenuOpen(targets,event);event.Skip();
     });
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){
-        if(!browser_->canClose()) {if(event.CanVeto()){event.Veto();return;}}
+        if(!browser_->canClose()) {if(event.CanVeto())event.Veto();return;}
         const auto list=panels();
         for(std::size_t i=0;i<list.size();++i) {
             if(list[i] && !list[i]->canClose()){
                 selectEditor(i);
-                if(event.CanVeto()){event.Veto();return;}
+                if(event.CanVeto())event.Veto();
+                return; // The loading panel must finish and join before destruction.
             }
         }
         settings_.saveWindowPlacement(*this);event.Skip();
@@ -104,7 +126,7 @@ WorkspaceFrame::~WorkspaceFrame() {
     // Destroy panels before either attached or inactive menus: game-menu helpers
     // unbind their handlers during the panel's destruction.
     menusReady_=false;
-    DestroyChildren();browser_=nullptr;tables_=nullptr;soundsets_=nullptr;talkTables_=nullptr;structured_=nullptr;dialogues_=nullptr;journals_=nullptr;textures_=nullptr;archives_=nullptr;
+    DestroyChildren();browser_=nullptr;tables_=nullptr;soundsets_=nullptr;talkTables_=nullptr;structured_=nullptr;dialogues_=nullptr;journals_=nullptr;models_=nullptr;textures_=nullptr;archives_=nullptr;
 }
 void WorkspaceFrame::buildMenus() {
     auto* bar=new wxMenuBar;
@@ -132,11 +154,11 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
-            "Resources (archives, KEY, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
+            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
         if(path)openPath(*path);
     },ID_Open);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){wxMessageBox(
-        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL, NeoTPC and NeoERF panels.",
+        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL, NeoMDL, NeoTPC and NeoERF panels.",
         "About NeoToolKit Test",wxOK|wxICON_INFORMATION,this);},ID_About);
     Bind(wxEVT_MENU,[this](wxCommandEvent& event){dark_=event.IsChecked();wxui::writeDarkMode("NeoToolKit-Test",dark_);applyAppearance();},ID_Dark);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontLarger);
@@ -157,7 +179,7 @@ void WorkspaceFrame::captureEditorMenus(std::size_t index) {
         // intentionally omitted while an editor workspace is active.
         if(label.CmpNoCase("Help")==0) {hiddenMenus_[index].emplace_back(menu);continue;}
         if(label=="File") {
-            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Texture","Archive"};
+            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive"};
             label=titles[index];
         }
         // All editors' own open remains available; host's Ctrl+O handles all types.
@@ -193,6 +215,10 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     if(auto* panel=panelFor(kind))return panel;
     neomodules::Context context;context.embedded=true;context.closeRequested=[this]{Close();};
     context.validateOutput=[this](const auto& path,const auto* owner){checkOutput(path,owner);};
+    context.resolveResource=[this](const std::string& resref,std::uint16_t type){
+        return browser_->resolveResource(resref,type);
+    };
+    context.captureResourceResolver=[this]{return browser_->captureResourceResolver();};
     neomodules::Panel* panel=nullptr;
     switch(kind) {
     case EditorKind::Tables:tables_=neo2da::ui::createEditorPanel(editors_,context);panel=tables_;break;
@@ -201,6 +227,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Gff:structured_=neogff::ui::createEditorPanel(editors_,context);panel=structured_;break;
     case EditorKind::Dialogues:dialogues_=neodlg::ui::createEditorPanel(editors_,context);panel=dialogues_;break;
     case EditorKind::Journals:journals_=neojrl::ui::createEditorPanel(editors_,context);panel=journals_;break;
+    case EditorKind::Models:models_=neomdl::ui::createModelEditorPanel(editors_,context);panel=models_;break;
     case EditorKind::Textures:textures_=neotpc::ui::createEditorPanel(editors_,context);panel=textures_;break;
     case EditorKind::Archives:
         archives_=neoerf::ui::createEditorPanel(editors_,context);panel=archives_;
@@ -238,6 +265,7 @@ void WorkspaceFrame::destroyEditor(EditorKind kind) {
     case EditorKind::Gff:structured_=nullptr;break;
     case EditorKind::Dialogues:dialogues_=nullptr;break;
     case EditorKind::Journals:journals_=nullptr;break;
+    case EditorKind::Models:models_=nullptr;break;
     case EditorKind::Textures:textures_=nullptr;break;
     case EditorKind::Archives:archives_=nullptr;break;
     }
@@ -362,7 +390,8 @@ bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std
 }
 bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession) {
     const auto inputs=resource.protectedInputs;
-    const auto selected=selectResourceEditor(editorsForType(resource.type),editor);
+    const auto selected=selectResourceEditor(editorsForResource(resource),editor);
+    normalizeResourceTypeForEditor(resource);
     ensureEditor(selected);
     bool ok=false;
     switch(selected) {
@@ -372,6 +401,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
+    case EditorKind::Models:ok=models_->openResource(std::move(resource));break;
     case EditorKind::Textures:ok=textures_->openResource(std::move(resource));break;
     case EditorKind::Archives:ok=archives_->openResource(std::move(resource));break;
     }
@@ -390,7 +420,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
             browser_->openPath(path);return;
         }
         const auto choices=editorsForExtension(ext);
-        if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, table, texture, soundset, talk table, or GFF-backed resource.");
+        if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, model, table, texture, soundset, talk table, or GFF-backed resource.");
         const auto selected=selectResourceEditor(choices,editor);
         ensureEditor(selected);
         bool ok=false;
@@ -401,6 +431,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
         case EditorKind::Gff:ok=structured_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
+        case EditorKind::Models:ok=models_->openFile(path);break;
         case EditorKind::Textures:ok=textures_->openFile(path);break;
         case EditorKind::Archives: {
             auto sources=browser_->sourcePaths();sources.insert(sources.end(),protectedInputs_.begin(),protectedInputs_.end());

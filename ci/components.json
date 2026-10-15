@@ -15,6 +15,10 @@
           "contains": "validateOutput"
         },
         {
+          "file": "wx/NeoModulePanel.hpp",
+          "contains": "resolveResource"
+        },
+        {
           "file": "include/neoshared/GffResourceDocument.hpp"
         },
         {
@@ -27,6 +31,13 @@
         },
         {
           "file": "scripts/install-wxwidgets.ps1"
+        },
+        {
+          "file": "include/neoshared/bif/KeyBifArchive.hpp"
+        },
+        {
+          "file": "bif/CMakeLists.txt",
+          "contains": "neoshared::bif"
         }
       ]
     },
@@ -41,7 +52,7 @@
         },
         {
           "file": "src/wx/BrowserPanel.hpp",
-          "contains": "BrowserPanel"
+          "contains": "resolveResource"
         }
       ]
     },
@@ -132,6 +143,28 @@
         {
           "file": "src/wx/JRLEditorPanel.hpp",
           "contains": "JRLEditorPanel"
+        }
+      ]
+    },
+    {
+      "key": "NEOMDL",
+      "folder": "NeoMDL",
+      "repository": "https://github.com/vrifftech/NeoMDL.git",
+      "ref": "main",
+      "required": [
+        {
+          "file": "CMakeLists.txt"
+        },
+        {
+          "file": "src/wx/ModelEditorPanel.hpp",
+          "contains": "ModelEditorPanel"
+        },
+        {
+          "file": "src/model/Model.hpp",
+          "contains": "decodeModelBytes"
+        },
+        {
+          "file": "src/material/Runtime.hpp"
         }
       ]
     },

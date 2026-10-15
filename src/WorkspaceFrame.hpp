@@ -8,6 +8,7 @@
 #include "wx/JRLEditorPanel.hpp"
 #include "wx/ERFEditorPanel.hpp"
 #include "wx/TextureEditorPanel.hpp"
+#include "wx/ModelEditorPanel.hpp"
 #include "EditorRouting.hpp"
 #include "NeoSettings.hpp"
 #include <wx/splitter.h>
@@ -29,6 +30,7 @@ public:
     neogff::ui::GFFEditorPanel& structured() {ensureEditor(EditorKind::Gff);return *structured_;}
     neodlg::ui::DLGEditorPanel& dialogues() {ensureEditor(EditorKind::Dialogues);return *dialogues_;}
     neojrl::ui::JRLEditorPanel& journals() {ensureEditor(EditorKind::Journals);return *journals_;}
+    neomdl::ui::ModelEditorPanel& models() {ensureEditor(EditorKind::Models);return *models_;}
     neotpc::ui::TextureEditorPanel& textures() {ensureEditor(EditorKind::Textures);return *textures_;}
     neoerf::ui::ERFEditorPanel& archives() {ensureEditor(EditorKind::Archives);return *archives_;}
     std::size_t activeEditorIndex() const {return activeEditor_;}
@@ -59,6 +61,7 @@ private:
     neogff::ui::GFFEditorPanel* structured_{};
     neodlg::ui::DLGEditorPanel* dialogues_{};
     neojrl::ui::JRLEditorPanel* journals_{};
+    neomdl::ui::ModelEditorPanel* models_{};
     neotpc::ui::TextureEditorPanel* textures_{};
     neoerf::ui::ERFEditorPanel* archives_{};
     wxSplitterWindow* splitter_{};

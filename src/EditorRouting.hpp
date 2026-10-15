@@ -1,5 +1,5 @@
 #pragma once
-#include <core/KeyBifArchive.hpp>
+#include <neoshared/bif/KeyBifArchive.hpp>
 #include <gff/AppModel.hpp>
 #include <core/ArchiveDocument.hpp>
 #include <algorithm>
@@ -9,8 +9,10 @@
 #include <string>
 #include <vector>
 namespace neotoolkit {
-enum class EditorKind : std::size_t { Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Textures, Archives };
-inline constexpr std::size_t kEditorCount=8;
+enum class EditorKind : std::size_t {
+    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives
+};
+inline constexpr std::size_t kEditorCount=9;
 struct EditorChoice { EditorKind kind; std::string id; std::string label; };
 inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -19,6 +21,7 @@ inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     if(ext==".2da"||ext==".gda")return {{EditorKind::Tables,"neo2da","Open with Neo2DA"}};
     if(ext==".ssf")return {{EditorKind::Soundsets,"neossf","Open with NeoSSF"}};
     if(ext==".tlk")return {{EditorKind::TalkTables,"neotlk","Open with NeoTLK"}};
+    if(ext==".mdl"||ext==".mdx")return {{EditorKind::Models,"neomdl","Open with NeoMDL"}};
     if(ext==".tpc"||ext==".txb"||ext==".tga"||ext==".dds"||ext==".png"||
        ext==".jpg"||ext==".jpeg"||ext==".jpe"||ext==".bmp"||ext==".txi")
         return {{EditorKind::Textures,"neotpc","Open with NeoTPC"}};
@@ -30,7 +33,7 @@ inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     return {};
 }
 inline std::vector<EditorChoice> editorsForType(std::uint16_t type) {
-    return editorsForExtension(neobif::resourceTypeExtension(type));
+    return editorsForExtension(neoshared::bif::resourceTypeExtension(type));
 }
 inline EditorKind selectResourceEditor(const std::vector<EditorChoice>& choices,const std::string& requested={}) {
     if(choices.empty())throw std::runtime_error("No integrated editor for this resource type.");
