@@ -61,11 +61,11 @@ ObjectPalette::ObjectPalette(wxWindow* parent):wxPanel(parent) {
     heading_=new wxTextCtrl(this,wxID_ANY,"0");options->Add(heading_,1,wxEXPAND);
     heightLabel_=new wxStaticText(this,wxID_ANY,"Z offset");options->Add(heightLabel_,0,wxALIGN_CENTER_VERTICAL);
     height_=new wxTextCtrl(this,wxID_ANY,"0");options->Add(height_,1,wxEXPAND);
-    options->Add(new wxStaticText(this,wxID_ANY,"Trigger size"),0,wxALIGN_CENTER_VERTICAL);
+    options->Add(new wxStaticText(this,wxID_ANY,"Footprint size"),0,wxALIGN_CENTER_VERTICAL);
     triggerSize_=new wxTextCtrl(this,wxID_ANY,"2");options->Add(triggerSize_,1,wxEXPAND);
     box->Add(options,0,wxEXPAND|wxALL,5);
     place_=new wxToggleButton(this,wxID_ANY,"Click map to place");box->Add(place_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
-    draw_=new wxButton(this,wxID_ANY,"Draw trigger polygon");box->Add(draw_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
+    draw_=new wxButton(this,wxID_ANY,"Draw polygon footprint");box->Add(draw_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
     draw_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
         wxCommandEvent event(EVT_TRIGGER_POLYGON_REQUESTED,GetId());event.SetEventObject(this);ProcessWindowEvent(event);
     });
@@ -176,8 +176,8 @@ void ObjectPalette::setPlacementEnabled(bool enabled) {
     placementEnabled_=enabled;
     const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
     place_->Enable(enabled&&row!=-1);
-    triggerSize_->Enable(row!=-1&&blueprints_.at(entries_->GetItemData(row)).type==2032);
-    draw_->Enable(enabled&&selectedType()==2032);
+    const auto type=selectedType();const bool polygon=type==2032||type==2040;
+    triggerSize_->Enable(polygon);draw_->Enable(enabled&&polygon);
 }
 std::optional<std::uint16_t> ObjectPalette::selectedType() const {
     const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);

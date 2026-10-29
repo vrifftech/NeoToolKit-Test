@@ -23,14 +23,18 @@ struct ObjectKind {
     std::uint32_t structure;
     bool shortCoordinates;
     bool bearing;
+    const char* reference{"TemplateResRef"};
 };
-inline constexpr std::array<ObjectKind,6> kObjectKinds{{
+inline constexpr std::array<ObjectKind,9> kObjectKinds{{
     {2044,"Placeables","Placeable List",9,true,true},
     {2027,"Creatures","Creature List",4,false,false},
     {2042,"Doors","Door List",8,true,true},
     {2058,"Waypoints","WaypointList",5,false,false},
     {2035,"Sounds","SoundList",6,false,false},
-    {2032,"Triggers","TriggerList",1,false,false}
+    {2032,"Triggers","TriggerList",1,false,false},
+    {2025,"Items","List",0,false,false},
+    {2040,"Encounters","Encounter List",7,false,false},
+    {2051,"Stores","StoreList",11,false,false,"ResRef"}
 }};
 
 struct ObjectPlacementOptions {

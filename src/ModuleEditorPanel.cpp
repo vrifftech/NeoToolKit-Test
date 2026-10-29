@@ -1,6 +1,8 @@
 #include "ModuleEditorPanel.hpp"
 #include "ObjectPalette.hpp"
 #include "AreaControls.hpp"
+#include "ModuleControls.hpp"
+#include "ModulePackage.hpp"
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
@@ -13,6 +15,7 @@
 #include <wx/filename.h>
 #include <wx/listbox.h>
 #include <wx/notebook.h>
+#include <wx/progdlg.h>
 #include <wx/splitter.h>
 #include <wx/timer.h>
 #include <wx/wrapsizer.h>
@@ -36,7 +39,7 @@ constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
-      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon};
+      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -79,6 +82,8 @@ struct EditState {
     std::map<Key,std::vector<std::uint8_t>> bytes;
     std::map<Key,ResourceDocument> templates;
     std::map<std::string,std::string> imports;
+    std::map<Key,neomdl::ResourceResolver> origins;
+    std::map<std::string,ModulePackageInput> inlineSources;
     std::string area,path,identity,action;
 };
 
@@ -98,7 +103,7 @@ public:
             {ID_ModuleAssets,"Game resources..."},{ID_RefreshArea,"Refresh 3D"},
             {ID_AddObject,"Add object..."},
             {ID_ModuleUndo,"Undo"},{ID_ModuleRedo,"Redo"},
-            {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_SceneReport,"Scene report..."}};
+            {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_PackageModule,"Package MOD..."},{ID_SceneReport,"Scene report..."}};
         for(const auto& action:actions)tools->Add(new wxButton(this,action.first,action.second),0,wxALL,3);
         root->Add(tools,0,wxEXPAND|wxALL,4);
         sourceLabel_=new wxStaticText(this,wxID_ANY,"Open a RIM/MOD archive or loose GIT, ARE or IFO resource.");
@@ -145,6 +150,15 @@ public:
             try {applyAreaPreviewPhase();}catch(const std::exception& e){wxui::showError(this,e);}
         });
         objectTabs_->AddPage(areaControls_,"Area");
+        moduleControls_=new ModuleControls(objectTabs_,[this](const std::string& path,const std::string& type,const std::string& value,const std::string& label){
+            rememberSelection();auto& resource=resources_.at({"module",kIfo});
+            const auto field=path.substr(0,path.find('('));
+            if(!resource.model->gff().root()->GetFieldByLabel(field))resource.model->addField({},field,type,type=="CExoLocString"?"-1":value);
+            resource.model->setValue(path,value);stage(resource);
+            selecting_=true;fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);selecting_=false;
+            rebuildObjects();refreshModuleControls();recordEdit("Edit module "+label);requestPreview();
+        },[this](ModuleControls::AreaAction action,std::size_t index,const std::string& name){editModuleAreaList(action,index,name);});
+        objectTabs_->AddPage(moduleControls_,"Module");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -152,7 +166,7 @@ public:
         auto* gizmoTools=new wxWrapSizer(wxHORIZONTAL);
         gizmoTools->Add(new wxStaticText(viewport,wxID_ANY,"Tool"),0,wxALIGN_CENTER_VERTICAL|wxALL,6);
         gizmoTool_=new wxChoice(viewport,wxID_ANY);
-        for(const auto* tool:{"Select (Q)","Move (W)","Rotate (E)","Trigger vertices (R)"})gizmoTool_->Append(tool);
+        for(const auto* tool:{"Select (Q)","Move (W)","Rotate (E)","Polygon vertices (R)"})gizmoTool_->Append(tool);
         gizmoTool_->SetSelection(0);gizmoTools->Add(gizmoTool_,0,wxALL,4);
         gizmoTools->Add(new wxButton(viewport,ID_FinishPolygon,"Finish polygon"),0,wxALL,4);
         gizmoTools->Add(new wxButton(viewport,ID_CancelPolygon,"Cancel polygon"),0,wxALL,4);
@@ -309,6 +323,7 @@ public:
             if(resources.empty())throw std::runtime_error("This module contains no GIT, ARE or IFO resources.");
             archivePath_=archive?path:std::filesystem::path{};
             moduleName_=neomdl::resourceKey(neoshared::pathToUtf8(path.stem()));
+            if(archive&&moduleName_.size()>2&&moduleName_.substr(moduleName_.size()-2)=="_s")moduleName_.resize(moduleName_.size()-2);
             if(moduleName_=="module")moduleName_=neomdl::resourceKey(neoshared::pathToUtf8(path.parent_path().filename()));
             catalog_=std::move(catalog);localDirectory_=archive?std::filesystem::path{}:path.parent_path();
             hostResources_=captureHostResources();
@@ -367,6 +382,7 @@ private:
             try {
                 auto& resource=resources_.at(identityKeys_.at(wxui::toStd(event.GetString())));
                 if(resource.source.type==kAre)refreshAreaControls();
+                if(resource.source.type==kIfo)refreshModuleControls();
                 stage(resource);rebuildObjects();recordEdit("Edit field");requestPreview();
             } catch(const std::exception& e) {wxui::showError(this,e);}
         });
@@ -393,6 +409,7 @@ private:
         file->AppendSeparator();
         file->Append(ID_SaveResources,"Save Resources...\tCtrl+S");
         file->Append(ID_SaveModule,"Save Archive Copy...\tCtrl+Shift+S");
+        file->Append(ID_PackageModule,"Package Combined MOD...");
         menus->Append(file,"Module");
         editMenu_=new wxMenu;
         editMenu_->Append(ID_ModuleUndo,"Undo\tCtrl+Z");editMenu_->Append(ID_ModuleRedo,"Redo\tCtrl+Y");
@@ -401,7 +418,7 @@ private:
         objects->Append(ID_AddObject,"Add Object from Game Files...");
         objects->Append(ID_FrameArea,"Frame Area");objects->Append(ID_FrameObject,"Frame Selected Object");
         objects->Append(ID_DuplicateObject,"Duplicate Selected Object");objects->Append(ID_DeleteObject,"Delete Selected Object");
-        objects->Append(ID_RedrawTrigger,"Redraw Selected Trigger Footprint");
+        objects->Append(ID_RedrawTrigger,"Redraw Selected Polygon Footprint");
         menus->Append(objects,"Objects");
         fieldMenus_=fields_->takeMenus();
         for(std::size_t i=0;i<fieldMenus_->GetMenuCount();) {
@@ -413,7 +430,8 @@ private:
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
         areaControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
-        palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templatesDirty_=false;
+        moduleControls_->load(nullptr,{});
+        palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templateOrigins_.clear();inlineSources_.clear();templatesDirty_=false;
         selecting_=true;fields_->clearDocuments();
         resources_=std::move(resources);identityKeys_.clear();inputs_.clear();
         areas_->Clear();std::set<std::string> names;
@@ -464,7 +482,16 @@ private:
     void refreshAreaControls() {
         controlsArea_=areaName();const auto resource=resources_.find({controlsArea_,kAre});
         areaControls_->load(resource==resources_.end()?nullptr:resource->second.model->gff().root(),game_==neomdl::model::GameVersion::Kotor2);
+        refreshModuleControls();
     }
+    void refreshModuleControls() {
+        std::set<std::string> names;
+        for(const auto& [key,resource]:resources_)if(key.second==kAre)names.insert(key.first);
+        if(session_)for(const auto& name:session_->areaResrefs())names.insert(name);
+        const auto resource=resources_.find({"module",kIfo});
+        moduleControls_->load(resource==resources_.end()?nullptr:resource->second.model->gff().root(),{names.begin(),names.end()});
+    }
+    void editModuleAreaList(ModuleControls::AreaAction action,std::size_t index,const std::string& name);
     void applyAreaPreviewPhase() {
         const auto phase=areaControls_->previewPhase();
         if(phase==0)canvas_->clearAreaEnvironmentReplay();
@@ -507,6 +534,7 @@ private:
     void mapOwners();
     bool saveResources();
     bool saveArchive();
+    bool packageModule();
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.source.bytes;
         savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
@@ -529,11 +557,12 @@ private:
         gizmoTool_->Enable(editing&&loaded);
         objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
+        moduleControls_->Enable(loaded&&!busy);
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
-        const bool trigger=selected&&placements_[objects_->GetSelection()].list=="TriggerList"&&previewCurrent_&&editing;
+        const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
         enableModuleCommand(ID_RedrawTrigger,trigger);FindWindow(ID_RedrawTrigger)->Enable(trigger);
-        for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport}) {
+        for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport,ID_PackageModule}) {
             enableModuleCommand(id,loaded&&!busy);if(auto* control=FindWindow(id))control->Enable(loaded&&!busy);
         }
         const bool archive=loaded&&!archivePath_.empty()&&!busy;
@@ -572,6 +601,7 @@ private:
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
+            case ID_PackageModule:packageModule();return;
             case ID_FrameArea:canvas_->frameModel();return;
             case ID_FrameObject:canvas_->framePosition(placements_.at(objects_->GetSelection()).position,5.0f);return;
             case ID_DuplicateObject:duplicateObject();return;
@@ -599,6 +629,7 @@ private:
     wxTextCtrl* transform_[4]{};wxButton* apply_{};wxStaticText* objectSource_{};
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     AreaControls* areaControls_{};std::string controlsArea_;
+    ModuleControls* moduleControls_{};
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
     bool drawingNewTrigger_{};
@@ -606,6 +637,8 @@ private:
     std::map<Key,Resource> resources_;
     std::map<Key,ResourceDocument> addedTemplates_;
     std::map<std::string,std::string> importedTemplates_;
+    std::map<Key,neomdl::ResourceResolver> templateOrigins_;
+    std::map<std::string,ModulePackageInput> inlineSources_;
     bool templatesDirty_{};
     std::vector<EditState> history_;std::size_t historyIndex_{};
     std::map<Key,std::vector<std::uint8_t>> savedBytes_;
@@ -636,8 +669,29 @@ EditState ModuleEditor::captureEdit(const std::string& action) const {
     EditState state;
     for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.source.bytes);
     state.templates=addedTemplates_;state.imports=importedTemplates_;
+    state.origins=templateOrigins_;
+    state.inlineSources=inlineSources_;
     state.area=areaName();state.path=selectedPath_;state.identity=fields_->activeResourceIdentity();state.action=action;
     return state;
+}
+
+void ModuleEditor::editModuleAreaList(ModuleControls::AreaAction action,std::size_t index,const std::string& name) {
+    rememberSelection();auto& resource=resources_.at({"module",kIfo});auto& root=*resource.model->gff().root();
+    if(!root.GetFieldByLabel("Mod_Area_list"))root.AddField(std::make_unique<neogff::GffList>("Mod_Area_list"));
+    auto& list=static_cast<neogff::GffList&>(*root.GetFieldByLabel("Mod_Area_list"));auto& records=list.allStructs();
+    using Action=ModuleControls::AreaAction;
+    switch(action) {
+    case Action::Add: {
+        auto area=std::make_unique<neogff::GffStruct>();area->typeid_=6;
+        area->AddField(std::make_unique<neogff::GffResRefField>("Area_Name",neomdl::resourceKey(name)));list.AddStruct(std::move(area));break;
+    }
+    case Action::Rename:setField(*records.at(index),std::make_unique<neogff::GffResRefField>("Area_Name",neomdl::resourceKey(name)));break;
+    case Action::Remove:records.erase(records.begin()+index);break;
+    case Action::Up:std::swap(records.at(index),records.at(index-1));break;
+    case Action::Down:std::swap(records.at(index),records.at(index+1));break;
+    }
+    resource.model->gff().dirty(true);stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();
+    refreshModuleControls();rebuildObjects();recordEdit("Edit module area list");requestPreview();
 }
 
 void ModuleEditor::rememberSelection() {
@@ -672,6 +726,8 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     }
     refreshAreaControls();
     addedTemplates_=state.templates;importedTemplates_=state.imports;
+    templateOrigins_=state.origins;
+    inlineSources_=state.inlineSources;
     for(const auto& [key,source]:addedTemplates_)writeResource(staging_,source);
     historyIndex_=index;selectedPath_=state.path;
     const auto areaChanged=areaName()!=state.area;areas_->SetStringSelection(wxui::toWx(state.area));
@@ -694,6 +750,9 @@ void ModuleEditor::updateGizmo() {
         if(p.list=="WaypointList")markers.push_back({p.path,Kind::Waypoint,p.position});
         if(p.list=="SoundList")markers.push_back({p.path,Kind::Sound,p.position});
         if(p.list=="CameraList")markers.push_back({p.path,Kind::Camera,p.position});
+        if(p.list=="List")markers.push_back({p.path,Kind::Item,p.position});
+        if(p.list=="Encounter List")markers.push_back({p.path,Kind::Encounter,p.position});
+        if(p.list=="StoreList")markers.push_back({p.path,Kind::Store,p.position});
         if(p.coordinates==Placement::Coordinates::Entry)markers.push_back({p.path,Kind::Entry,p.position});
     }
     canvas_->setAreaMarkers(std::move(markers),selectedPath_);
@@ -702,6 +761,13 @@ void ModuleEditor::updateGizmo() {
     std::vector<Vec3> footprint;
     if(ready&&placements_[selected].list=="TriggerList") {
         for(const auto& trigger:canvas_->areaScene().triggers())if(trigger.sourceIndex==placements_[selected].index)footprint=trigger.worldFootprint;
+    } else if(ready&&placements_[selected].list=="Encounter List") {
+        const auto& p=placements_[selected];const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+        const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+        if(const auto* geometry=static_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry")))
+            for(const auto& point:geometry->allStructs()) {
+                const auto fields=fieldsOf(*point);footprint.push_back({p.position.x+scalar(fields,"X"),p.position.y+scalar(fields,"Y"),p.position.z+scalar(fields,"Z")});
+            }
     }
     canvas_->setAreaPolygon(std::move(footprint),tool==3&&ready);
     if(ready) {
@@ -712,7 +778,7 @@ void ModuleEditor::updateGizmo() {
         }
         canvas_->setAreaGizmo(mode,p.position,p.heading);
     } else canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
-    gizmoHint_->SetLabel(tool==3?"Select a trigger, then drag its yellow vertices. Redraw footprint replaces the polygon.":mode==neomdl::ui::AreaGizmoMode::Move?
+    gizmoHint_->SetLabel(tool==3?"Select a trigger or encounter, then drag its yellow vertices. Redraw footprint replaces the polygon.":mode==neomdl::ui::AreaGizmoMode::Move?
         "Drag X (red), Y (green), Z (blue), or the center for XY. Esc cancels.":
         mode==neomdl::ui::AreaGizmoMode::Rotate?"Drag the blue ring to change heading. Esc cancels.":
         "Select an object, then choose Move or Rotate.");
@@ -722,24 +788,27 @@ void ModuleEditor::updateGizmo() {
 void ModuleEditor::beginTriggerDrawing(bool create) {
     palette_->stopPlacing();canvas_->cancelAreaGizmo();canvas_->cancelAreaPolygon();rememberSelection();
     drawingNewTrigger_=create;gizmoTool_->SetSelection(3);canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
+    const bool encounter=create?palette_->selectedType()==2040:placements_.at(objects_->GetSelection()).list=="Encounter List";
+    const auto limit=encounter?std::optional<std::size_t>{}:std::optional<std::size_t>{neomdl::ui::kAreaTriggerVertexLimit};
     if(create) {
-        const auto options=palette_->placementOptions();canvas_->beginAreaPolygon(options.planeZ,options.zOffset);
-    } else canvas_->beginAreaPolygon(placements_.at(objects_->GetSelection()).position.z);
+        const auto options=palette_->placementOptions();canvas_->beginAreaPolygon(options.planeZ,options.zOffset,limit);
+    } else canvas_->beginAreaPolygon(placements_.at(objects_->GetSelection()).position.z,0,limit);
 }
 
 void ModuleEditor::writeTriggerGeometry(const Placement& p,const std::vector<Vec3>& points,int vertex) {
     auto& resource=resources_.at(identityKeys_.at(p.identity));
-    auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel("TriggerList"));
+    auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
     auto& record=*list.GetStruct(p.index);
     const auto* original=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
     auto geometry=std::make_unique<neogff::GffList>("Geometry");
-    const char* labels[]={"PointX","PointY","PointZ"};
+    const bool encounter=p.list=="Encounter List";
+    const std::array<const char*,3> labels=encounter?std::array<const char*,3>{"X","Y","Z"}:std::array<const char*,3>{"PointX","PointY","PointZ"};
     const float origin[]={p.position.x,p.position.y,p.position.z};
     for(std::size_t i=0;i<points.size();++i) {
         std::unique_ptr<neogff::GffStruct> point;
         const bool inherited=!original||i>=original->count();
         if(!inherited) {auto copy=original->GetStruct(i)->Clone();point.reset(static_cast<neogff::GffStruct*>(copy.release()));}
-        else {point=std::make_unique<neogff::GffStruct>();point->typeid_=3;}
+        else {point=std::make_unique<neogff::GffStruct>();point->typeid_=encounter?std::uint32_t(i):3;}
         if(vertex<0||i==std::size_t(vertex)||inherited) {
             const float values[]={points[i].x,points[i].y,points[i].z};
             for(std::size_t axis=0;axis<3;++axis) {
@@ -765,16 +834,17 @@ void ModuleEditor::polygonChanged(const neomdl::ui::AreaPolygonEvent& event) {
                 if(drawingNewTrigger_)insertObject(event.points.front(),palette_->placementOptions(),event.points);
                 else {
                     const auto p=placements_.at(objects_->GetSelection());
-                    canvas_->previewAreaTriggerGeometry(p.index,event.points);writeTriggerGeometry(p,event.points,-1);
-                    fields_->refreshActiveDocument();rebuildObjects();recordEdit("Redraw trigger polygon");requestPreview();
+                    if(p.list=="TriggerList")canvas_->previewAreaTriggerGeometry(p.index,event.points);
+                    writeTriggerGeometry(p,event.points,-1);
+                    fields_->refreshActiveDocument();rebuildObjects();recordEdit("Redraw polygon footprint");requestPreview();
                 }
             } else if(event.phase==neomdl::ui::AreaGizmoPhase::Preview)
-                setModuleStatusText(wxString::Format("Trigger polygon: %zu / 255 corners. Enter finishes; Backspace removes the last corner.",event.points.size()));
+                setModuleStatusText(wxString::Format("Polygon: %zu corners. Enter finishes; Backspace removes the last corner.",event.points.size()));
         } else {
-            const auto p=placements_.at(objects_->GetSelection());canvas_->previewAreaTriggerGeometry(p.index,event.points);
+            const auto p=placements_.at(objects_->GetSelection());if(p.list=="TriggerList")canvas_->previewAreaTriggerGeometry(p.index,event.points);
             if(event.phase==neomdl::ui::AreaGizmoPhase::Commit) {
                 writeTriggerGeometry(p,event.points,event.vertex);fields_->refreshActiveDocument();rebuildObjects();
-                recordEdit("Move trigger vertex");requestPreview();
+                recordEdit("Move polygon vertex");requestPreview();
             }
         }
         updateActions();
@@ -797,6 +867,15 @@ void ModuleEditor::previewTransform(const Placement& p,Vec3 position,float headi
     canvas_->moveAreaMarker(p.path,position);
     if(p.list=="TriggerList")canvas_->previewAreaTrigger(p.index,position,heading-p.heading);
     if(p.list=="CameraList")canvas_->previewAreaCamera(p.index,position);
+    if(p.list=="Encounter List") {
+        const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+        const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+        std::vector<Vec3> points;
+        if(const auto* geometry=static_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry")))for(const auto& point:geometry->allStructs()) {
+            const auto fields=fieldsOf(*point);points.push_back({position.x+scalar(fields,"X"),position.y+scalar(fields,"Y"),position.z+scalar(fields,"Z")});
+        }
+        canvas_->setAreaPolygon(std::move(points),gizmoTool_->GetSelection()==3);
+    }
     for(const auto& placement:canvas_->areaScene().placements()) {
         const auto list=placement.kind==neomdl::AreaObjectKind::Creature?"Creature List":
             placement.kind==neomdl::AreaObjectKind::Door?"Door List":"Placeable List";
@@ -837,7 +916,7 @@ void ModuleEditor::rebuildObjects() {
                     p.heading=std::atan2(-scalar(fields,"XOrientation"),scalar(fields,"YOrientation"))*kDegrees;
                 }
                 p.label=p.list+" ["+std::to_string(i)+"]";
-                for(const auto* name:{"Tag","TemplateResRef","CameraID"})if(const auto* value=record.GetFieldByLabel(name)) {
+                for(const auto* name:{"Tag","TemplateResRef","ResRef","CameraID"})if(const auto* value=record.GetFieldByLabel(name)) {
                     if(!value->GetString().empty()) {p.label+=" — "+value->GetString();break;}
                 }
                 placements_.push_back(std::move(p));
@@ -877,6 +956,9 @@ void ModuleEditor::selectObject(int index,bool selectField) {
             else if(p.list=="Creature List")source="UTC supplies creature properties. GIT supplies placement; the engine may adjust it to a safe location.";
             else if(p.list=="TriggerList")source="UTT supplies type, scripts and facing. GIT supplies position, links and footprint; rotation edits the footprint.";
             else if(p.list=="SoundList")source="UTS supplies sound properties. GIT supplies position and generated type.";
+            else if(p.list=="List")source="UTI supplies item properties. GIT supplies placement and facing; the item is shown with a selectable marker.";
+            else if(p.list=="StoreList")source="UTM supplies store properties and inventory. GIT uses ResRef for its template, plus position and facing. The store is shown with a selectable marker.";
+            else if(p.list=="Encounter List")source="UTE supplies encounter rules and creatures. GIT supplies the footprint and absolute spawn points. Moving an encounter also moves its spawn points.";
         }
         objectSource_->SetLabel(wxui::toWx(source));objectSource_->Wrap(FromDIP(195));objectSource_->GetParent()->Layout();
         const float values[]={p.position.x,p.position.y,p.position.z,p.heading};
@@ -906,6 +988,13 @@ void ModuleEditor::applyTransform() {
     const bool rotationChanged=p.rotation!=Placement::Rotation::None&&values[3]!=p.heading;
     if(!positionChanged&&!rotationChanged)return;
     rememberSelection();
+    if(p.list=="Encounter List"&&positionChanged) {
+        auto& record=*static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list)).GetStruct(p.index);
+        if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))for(auto& spawn:spawns->allStructs()) {
+            const auto fields=fieldsOf(*spawn);const char* labels[]={"X","Y","Z"};
+            for(std::size_t axis=0;axis<3;++axis)if(values[axis]!=previous[axis])setField(*spawn,std::make_unique<neogff::GffFloatField>(labels[axis],scalar(fields,labels[axis])+values[axis]-previous[axis]));
+        }
+    }
     if(p.list=="TriggerList") {
         auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
         auto& record=*list.GetStruct(p.index);
@@ -1009,6 +1098,11 @@ bool ModuleEditor::expandItems(neogff::GffStruct& record,const neomdl::ResourceR
             }
         }
     }
+    if(auto* creatures=static_cast<neogff::GffList*>(record.GetFieldByLabel("CreatureList")))for(auto& creature:creatures->allStructs()) {
+        const auto name=neomdl::resourceKey(creature->GetFieldByLabel("ResRef")->GetString());
+        const auto imported=importTemplate(resolver(name,2027).value(),resolver);
+        if(imported!=name) {setField(*creature,std::make_unique<neogff::GffResRefField>("ResRef",imported));changed=true;}
+    }
     return changed;
 }
 
@@ -1041,6 +1135,7 @@ std::string ModuleEditor::importTemplate(ResourceDocument source,const neomdl::R
     source.identity="module-import:"+identity+"#"+name;
     inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
     addedTemplates_.emplace(Key{name,source.type},std::move(source));
+    templateOrigins_[{name,key.second}]=resolver;
     importedTemplates_[identity]=name;templatesDirty_=true;return name;
 }
 
@@ -1082,17 +1177,18 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     }
     instance->typeid_=kind.structure;
     const auto reference=templates&&kind.type!=2058?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
-    if(!templates)expandItems(*instance,resolver,false);
-    setField(*instance,std::make_unique<neogff::GffResRefField>("TemplateResRef",reference));
+    if(!templates) {expandItems(*instance,resolver,false);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
+    setField(*instance,std::make_unique<neogff::GffResRefField>(kind.reference,reference));
     const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
     number(kind.shortCoordinates?"X":"XPosition",position.x);
     number(kind.shortCoordinates?"Y":"YPosition",position.y);
     number(kind.shortCoordinates?"Z":"ZPosition",position.z);
     const auto angle=canvas_->snappedAreaHeading(options.heading)/kDegrees;
     if(kind.bearing)number("Bearing",angle);
-    else if(kind.type!=2035) {number("XOrientation",-std::sin(angle));number("YOrientation",std::cos(angle));number("ZOrientation",0.0f);}
+    else if(kind.type!=2035&&kind.type!=2040) {number("XOrientation",-std::sin(angle));number("YOrientation",std::cos(angle));number("ZOrientation",0.0f);}
     if(kind.type==2035)setField(*instance,std::make_unique<neogff::GffUInt32Field>("GeneratedType",0));
-    if(kind.type==2032) {
+    if(kind.type==2032||kind.type==2040) {
+        const bool encounter=kind.type==2040;
         auto geometry=std::make_unique<neogff::GffList>("Geometry");
         auto points=polygon;
         for(auto& point:points) {point.x-=position.x;point.y-=position.y;point.z-=position.z;}
@@ -1102,13 +1198,19 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
                 points.push_back({p[0]*std::cos(angle)-p[1]*std::sin(angle),p[0]*std::sin(angle)+p[1]*std::cos(angle),0.0f});
         }
         for(const auto& point:points) {
-            auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
-            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",point.x));
-            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",point.y));
-            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",point.z));
+            auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=encounter?std::uint32_t(geometry->count()):3;
+            vertex->AddField(std::make_unique<neogff::GffFloatField>(encounter?"X":"PointX",point.x));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>(encounter?"Y":"PointY",point.y));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>(encounter?"Z":"PointZ",point.z));
             geometry->AddStruct(std::move(vertex));
         }
         setField(*instance,std::move(geometry));
+        if(encounter) {
+            auto spawns=std::make_unique<neogff::GffList>("SpawnPointList");auto spawn=std::make_unique<neogff::GffStruct>();spawn->typeid_=0;
+            spawn->AddField(std::make_unique<neogff::GffFloatField>("X",position.x));spawn->AddField(std::make_unique<neogff::GffFloatField>("Y",position.y));
+            spawn->AddField(std::make_unique<neogff::GffFloatField>("Z",position.z));spawn->AddField(std::make_unique<neogff::GffFloatField>("Orientation",angle));
+            spawns->AddStruct(std::move(spawn));setField(*instance,std::move(spawns));
+        }
     }
     if(!root.GetFieldByLabel(kind.list))root.AddField(std::make_unique<neogff::GffList>(kind.list));
     auto& list=dynamic_cast<neogff::GffList&>(*root.GetFieldByLabel(kind.list));
@@ -1276,6 +1378,59 @@ bool ModuleEditor::saveArchive() {
     }
     for(const auto& [key,source]:addedTemplates_)archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
     archive.save(path);saved();setModuleStatusText("Saved module archive copy: "+neosettings::pathToWx(path));return true;
+}
+
+bool ModuleEditor::packageModule() {
+    std::vector<std::filesystem::path> archives;
+    const auto addArchive=[&](const std::filesystem::path& path) {
+        if(std::find(archives.begin(),archives.end(),path)==archives.end())archives.push_back(path);
+    };
+    if(!archivePath_.empty()) {
+        addArchive(archivePath_);
+        std::map<std::string,std::filesystem::path> siblings;
+        for(const auto& file:std::filesystem::directory_iterator(archivePath_.parent_path()))
+            if(file.is_regular_file())siblings.emplace(neomdl::resourceKey(neoshared::pathToUtf8(file.path().filename())),file.path());
+        for(const auto* suffix:{".mod","_s.rim",".rim","_dlg.erf"})if(const auto found=siblings.find(moduleName_+suffix);found!=siblings.end())addArchive(found->second);
+    }
+    if(session_)for(const auto& path:session_->moduleScope()->archives)addArchive(path);
+    const auto sources=chooseModulePackageSources(this,std::move(archives),localDirectory_,dark_);if(!sources)return false;
+    const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
+    const auto resolve=[catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+        for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==neomdl::resourceKey(name))return readArchiveResource(*catalog,entry);
+        if(local)if(auto source=local(name,type))return source;
+        return game(name,type);
+    };
+    std::vector<ModulePackageInput> edits;
+    for(auto& [key,resource]:resources_) {if(resource.model->dirty())stage(resource);edits.push_back({resource.source,resolve});}
+    for(const auto& [key,source]:addedTemplates_)edits.push_back({source,templateOrigins_.at(key)});
+    std::vector<ModulePackageInput> inlineSources;for(const auto& [identity,source]:inlineSources_)inlineSources.push_back(source);
+    ModulePackage package;
+    {
+        wxProgressDialog progress("Package module","Collecting module resources...",100,this,wxPD_APP_MODAL|wxPD_ELAPSED_TIME);
+        package=collectModulePackage(*sources,localDirectory_,std::move(edits),inlineSources,resolve,[&](const std::string& text){progress.Pulse(wxui::toWx(text));});
+    }
+    wxDialog review(this,wxID_ANY,"Module package contents",wxDefaultPosition,FromDIP(wxSize(760,520)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
+    auto* box=new wxBoxSizer(wxVERTICAL);box->Add(new wxTextCtrl(&review,wxID_ANY,wxui::toWx(package.report),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);
+    box->Add(review.CreateButtonSizer(wxOK|wxCANCEL),0,wxALIGN_RIGHT|wxALL,8);review.SetSizer(box);wxui::applyTheme(&review,dark_);
+    static_cast<wxButton*>(review.FindWindow(wxID_OK))->SetLabel("Save MOD...");if(review.ShowModal()!=wxID_OK)return false;
+    wxFileDialog dialog(this,"Save combined module",{},wxui::toWx(moduleName_+".mod"),"Module archive (*.mod)|*.mod",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+    if(dialog.ShowModal()!=wxID_OK)return false;
+    const auto path=neosettings::pathFromWx(dialog.GetPath());auto protectedInputs=inputs_;
+    protectedInputs.insert(protectedInputs.end(),sources->archives.begin(),sources->archives.end());
+    protectedInputs.insert(protectedInputs.end(),sources->extraFiles.begin(),sources->extraFiles.end());
+    for(const auto& [key,source]:package.resources)protectedInputs.insert(protectedInputs.end(),source.protectedInputs.begin(),source.protectedInputs.end());
+    validateHostOutput(path);neoshared::checkResourceOutput(path,protectedInputs);
+    const auto directory=staging_/"package";std::filesystem::create_directory(directory);
+    neoshared::erf::ErfArchive archive;archive.new_archive(path,neoshared::erf::ArchiveType::MOD);
+    {
+        wxProgressDialog progress("Export module","Writing module resources...",100,this,wxPD_APP_MODAL|wxPD_ELAPSED_TIME);
+        for(auto& [key,source]:package.resources) {
+            source.fileName=key.first+"."+neomdl::resourceExtension(key.second);progress.Pulse("Writing "+wxui::toWx(source.fileName));writeResource(directory,source);
+            archive.add_resource(directory/neoshared::pathFromUtf8(source.fileName),true);
+        }
+        progress.Pulse("Saving MOD archive...");archive.save(path);
+    }
+    saved();setModuleStatusText("Packaged "+wxString::Format("%zu",package.resources.size())+" resources: "+neosettings::pathToWx(path));return true;
 }
 
 } // namespace
