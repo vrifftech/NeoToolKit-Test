@@ -30,8 +30,8 @@ AreaControls::AreaControls(wxWindow* parent,
     const char* notes[]={
         "Scene ambient and sun/moon colors are separate. Sun/moon lighting uses the area's sun model.",
         "Enable fog applies to day and night. Night uses its own color and distances.",
-        "Grass appears on eligible room surfaces. Set a texture and positive size before increasing density.",
-        "Day/night cycles use the module's IFO clock. Weather chances affect in-game scheduling."};
+        "Grass uses eligible room surfaces. Atlas weights are normalized by the engine. Set texture and size before density.",
+        "Day/night cycles use the IFO clock. Weather rolls use priority: rain, snow, then K2 lightning, rather than adding chances."};
     for(int i=0;i<4;++i) {
         category->Append(names[i]);page[i]=new wxScrolledWindow(pages);page[i]->SetScrollRate(0,FromDIP(12));
         content[i]=new wxBoxSizer(wxVERTICAL);page[i]->SetSizer(content[i]);pages->AddPage(page[i],names[i]);
@@ -117,7 +117,7 @@ AreaControls::AreaControls(wxWindow* parent,
             layout->Add(line,0,wxEXPAND|wxALL,5);
         }
     }
-    auto* hint=new wxStaticText(this,wxID_ANY,"Only fields present in this ARE are enabled. Typed values apply on Enter or when leaving the field.");
+    auto* hint=new wxStaticText(this,wxID_ANY,"Only present fields are enabled. Slider spans are editing ranges, not engine limits. Exact values apply on Enter or leaving the field.");
     hint->Wrap(FromDIP(195));box->Add(hint,0,wxEXPAND|wxALL,5);SetSizer(box);load(nullptr,true);enablePreview(false);
 }
 

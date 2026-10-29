@@ -133,6 +133,8 @@ public:
                 {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"}})
             objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
         objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
+        objectSource_=new wxStaticText(objectPage,wxID_ANY,"Select an object to see where its properties load from.");
+        objectSource_->Wrap(FromDIP(195));objectBox->Add(objectSource_,0,wxEXPAND|wxALL,6);
         palette_=new ObjectPalette(objectTabs_);objectTabs_->AddPage(objectPage,"Objects");objectTabs_->AddPage(palette_,"Add objects");
         areaControls_=new AreaControls(objectTabs_,[this](const std::string& field,const std::string& value,const std::string& label){
             rememberSelection();auto& resource=resources_.at({controlsArea_,kAre});
@@ -537,7 +539,13 @@ private:
         const bool archive=loaded&&!archivePath_.empty()&&!busy;
         enableModuleCommand(ID_SaveModule,archive);FindWindow(ID_SaveModule)->Enable(archive);
         for(const auto id:{ID_FrameObject,ID_DuplicateObject,ID_DeleteObject}) {
-            const bool enabled=selected&&(id==ID_FrameObject||(editing&&placements_[objects_->GetSelection()].coordinates!=Placement::Coordinates::Entry));
+            bool enabled=selected&&(id==ID_FrameObject||(editing&&placements_[objects_->GetSelection()].coordinates!=Placement::Coordinates::Entry));
+            if(enabled&&id==ID_DuplicateObject&&placements_[objects_->GetSelection()].list=="CameraList") {
+                const auto& p=placements_[objects_->GetSelection()];
+                const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+                const auto& cameras=static_cast<const neogff::GffList&>(*root.GetFieldByLabel("CameraList"));
+                enabled=cameras.count()<(game_==neomdl::model::GameVersion::Kotor1?50u:70u);
+            }
             enableModuleCommand(id,enabled);FindWindow(id)->Enable(enabled);
         }
         apply_->Enable(selected&&editing);for(auto* control:transform_)control->Enable(selected&&editing);
@@ -588,7 +596,7 @@ private:
     neogff::ui::GFFEditorPanel* fields_{};
     neomdl::ui::ModelCanvas* canvas_{};
     wxStaticText* sourceLabel_{};wxChoice* areas_{};wxChoice* gameChoice_{};wxListBox* objects_{};
-    wxTextCtrl* transform_[4]{};wxButton* apply_{};
+    wxTextCtrl* transform_[4]{};wxButton* apply_{};wxStaticText* objectSource_{};
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     AreaControls* areaControls_{};std::string controlsArea_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
@@ -761,7 +769,7 @@ void ModuleEditor::polygonChanged(const neomdl::ui::AreaPolygonEvent& event) {
                     fields_->refreshActiveDocument();rebuildObjects();recordEdit("Redraw trigger polygon");requestPreview();
                 }
             } else if(event.phase==neomdl::ui::AreaGizmoPhase::Preview)
-                setModuleStatusText(wxString::Format("Trigger polygon: %zu corners. Enter finishes; Backspace removes the last corner.",event.points.size()));
+                setModuleStatusText(wxString::Format("Trigger polygon: %zu / 255 corners. Enter finishes; Backspace removes the last corner.",event.points.size()));
         } else {
             const auto p=placements_.at(objects_->GetSelection());canvas_->previewAreaTriggerGeometry(p.index,event.points);
             if(event.phase==neomdl::ui::AreaGizmoPhase::Commit) {
@@ -857,6 +865,20 @@ void ModuleEditor::selectObject(int index,bool selectField) {
     canvas_->setSelectedAreaOwners(pathOwners_[selectedPath_]);
     if(index!=wxNOT_FOUND) {
         const auto& p=placements_[index];
+        std::string source="Inline GIT fields supply this object's properties.";
+        const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+        const auto* templates=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+        if(p.coordinates==Placement::Coordinates::Entry)source="Entry position and direction are saved in module.ifo.";
+        else if(p.list=="WaypointList")source="Waypoint properties are embedded in GIT. The engine grounds their height on the walkmesh.";
+        else if(p.list=="CameraList")source="GIT supplies camera position and quaternion orientation. K1 allows 50 cameras; K2 allows 70.";
+        else if(templates&&templates->value) {
+            if(p.list=="Door List")source="UTD supplies door state. GIT supplies placement, links, and K2 tag/tweak color.";
+            else if(p.list=="Placeable List")source="UTP supplies appearance, animation and inventory. GIT supplies placement and K2 tweak color.";
+            else if(p.list=="Creature List")source="UTC supplies creature properties. GIT supplies placement; the engine may adjust it to a safe location.";
+            else if(p.list=="TriggerList")source="UTT supplies type, scripts and facing. GIT supplies position, links and footprint; rotation edits the footprint.";
+            else if(p.list=="SoundList")source="UTS supplies sound properties. GIT supplies position and generated type.";
+        }
+        objectSource_->SetLabel(wxui::toWx(source));objectSource_->Wrap(FromDIP(195));objectSource_->GetParent()->Layout();
         const float values[]={p.position.x,p.position.y,p.position.z,p.heading};
         for(std::size_t i=0;i<4;++i)transform_[i]->ChangeValue(wxui::toWx(decimal(values[i])));
         if(selectField) {
@@ -865,7 +887,11 @@ void ModuleEditor::selectObject(int index,bool selectField) {
             fields_->selectField(p.coordinates==Placement::Coordinates::Entry?"Mod_Entry_X":p.path);
             selecting_=false;
         }
-    } else for(auto* field:transform_)field->Clear();
+    } else {
+        for(auto* field:transform_)field->Clear();
+        objectSource_->SetLabel("Select an object to see where its properties load from.");
+        objectSource_->Wrap(FromDIP(195));
+    }
     updateActions();
 }
 
@@ -938,10 +964,10 @@ void ModuleEditor::duplicateObject() {
     auto& list=static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
     auto copy=list.GetStruct(p.index)->Clone();
     if(p.list=="CameraList") {
-        std::int32_t id=-1;
-        for(const auto& camera:list.allStructs())id=std::max(id,
-            static_cast<const neogff::GffIntField&>(*camera->GetFieldByLabel("CameraID")).value);
-        static_cast<neogff::GffIntField&>(*static_cast<neogff::GffStruct&>(*copy).GetFieldByLabel("CameraID")).value=id+1;
+        std::set<std::int32_t> ids;
+        for(const auto& camera:list.allStructs())ids.insert(static_cast<const neogff::GffIntField&>(*camera->GetFieldByLabel("CameraID")).value);
+        std::int32_t id=0;while(ids.count(id))++id;
+        static_cast<neogff::GffIntField&>(*static_cast<neogff::GffStruct&>(*copy).GetFieldByLabel("CameraID")).value=id;
     }
     selectedPath_=p.list+"\\"+std::to_string(list.count());
     list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));resource.model->gff().dirty(true);
@@ -1044,11 +1070,18 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     auto instance=std::make_unique<neogff::GffStruct>();
     if(!templates||kind.type==2058) {
         auto copy=file.root()->Clone();instance.reset(static_cast<neogff::GffStruct*>(copy.release()));
-    } else for(const auto* name:{"Tag","LinkedTo","LinkedToModule","LinkedToFlags","TransitionDestin",
-            "OpenState","AnimationState","UseTweakColor","TweakColor"})
-        if(const auto* field=file.root()->GetFieldByLabel(name))instance->AddField(field->Clone());
+    } else {
+        const auto copy=[&](std::initializer_list<const char*> names) {
+            for(const auto* name:names)if(const auto* field=file.root()->GetFieldByLabel(name))instance->AddField(field->Clone());
+        };
+        if(kind.type==2042||kind.type==2032)copy({"LinkedTo","LinkedToModule","LinkedToFlags","TransitionDestin"});
+        if(game_==neomdl::model::GameVersion::Kotor2) {
+            if(kind.type==2042)copy({"Tag"});
+            if(kind.type==2042||kind.type==2044)copy({"UseTweakColor","TweakColor"});
+        }
+    }
     instance->typeid_=kind.structure;
-    const auto reference=templates?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
+    const auto reference=templates&&kind.type!=2058?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
     if(!templates)expandItems(*instance,resolver,false);
     setField(*instance,std::make_unique<neogff::GffResRefField>("TemplateResRef",reference));
     const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
