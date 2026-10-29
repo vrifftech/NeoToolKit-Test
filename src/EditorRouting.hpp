@@ -11,9 +11,9 @@
 #include <vector>
 namespace neotoolkit {
 enum class EditorKind : std::size_t {
-    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives
+    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives, Modules
 };
-inline constexpr std::size_t kEditorCount=9;
+inline constexpr std::size_t kEditorCount=10;
 struct EditorChoice { EditorKind kind; std::string id; std::string label; };
 inline std::string editorExtensionForPath(const std::filesystem::path& path) {
     return neomdl::asciiModelSuffix(path) ? ".mdl" : neoshared::pathToUtf8(path.extension());
@@ -21,6 +21,10 @@ inline std::string editorExtensionForPath(const std::filesystem::path& path) {
 inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
     if(!ext.empty() && ext.front()!='.')ext='.'+ext;
+    if(ext==".rim"||ext==".mod")return {{EditorKind::Archives,"neoerf","Open with NeoERF"},
+        {EditorKind::Modules,"module","Open with Live Module Editor"}};
+    if(ext==".git"||ext==".are"||ext==".ifo")return {{EditorKind::Modules,"module","Open with Live Module Editor"},
+        {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(neoerf::isArchiveExtension(ext))return {{EditorKind::Archives,"neoerf","Open with NeoERF"}};
     if(ext==".2da"||ext==".gda")return {{EditorKind::Tables,"neo2da","Open with Neo2DA"}};
     if(ext==".ssf")return {{EditorKind::Soundsets,"neossf","Open with NeoSSF"}};

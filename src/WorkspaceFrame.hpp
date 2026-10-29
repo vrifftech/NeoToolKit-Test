@@ -10,6 +10,7 @@
 #include "wx/TextureEditorPanel.hpp"
 #include "wx/ModelEditorPanel.hpp"
 #include "EditorRouting.hpp"
+#include "ModuleEditorPanel.hpp"
 #include "NeoSettings.hpp"
 #include <wx/splitter.h>
 #include <wx/aui/auibook.h>
@@ -64,6 +65,7 @@ private:
     neomdl::ui::ModelEditorPanel* models_{};
     neotpc::ui::TextureEditorPanel* textures_{};
     neoerf::ui::ERFEditorPanel* archives_{};
+    ModuleEditorPanel* modules_{};
     wxSplitterWindow* splitter_{};
     wxAuiNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;
