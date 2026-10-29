@@ -388,11 +388,13 @@ void WorkspaceFrame::applyAppearance() {
     if(auto* bar=GetMenuBar())bar->Check(ID_Dark,dark_);
 }
 void WorkspaceFrame::checkOutput(const std::filesystem::path& path,const neomodules::Panel* owner) const {
-    neoshared::checkResourceOutput(path,protectedInputs_);
-    neoshared::checkResourceOutput(path,browser_->sourcePaths());
-    for(auto* panel:panels()) if(panel && panel!=owner)
-        for(const auto& open:panel->openPaths()) if(neoshared::sameResourcePath(path,open))
-            throw std::runtime_error("That destination is open in another editor. Save a different working copy first.");
+    auto inputs=protectedInputs_;const auto browserInputs=browser_->sourcePaths();
+    inputs.insert(inputs.end(),browserInputs.begin(),browserInputs.end());
+    for(auto* panel:panels())if(panel && panel!=owner) {
+        const auto open=panel->openPaths();inputs.insert(inputs.end(),open.begin(),open.end());
+    }
+    std::sort(inputs.begin(),inputs.end());inputs.erase(std::unique(inputs.begin(),inputs.end()),inputs.end());
+    neoshared::checkResourceOutput(path,inputs);
 }
 bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std::string& editor) {
     return openSnapshot(std::move(resource),editor,true);

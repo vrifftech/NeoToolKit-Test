@@ -156,6 +156,7 @@ void BlueprintEditor::addItem() {
 }
 void BlueprintEditor::loadPreview() {
     try {
+        neomdl::ResourceLoadScope loading(neomdl::resourceLoadJob());
         const auto& install=*session_->installation();const auto path=neoshared::game::findExistingPathCaseInsensitive(install.installPath/"dialog.tlk");
         const auto game=neoshared::game::gameIdFromString(install.id).value()==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
         preview_->load(wxui::toStd(layout_->GetValue()),resolver_,path,game);preview_->setStore(*root_,resolver_,int(stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED)));

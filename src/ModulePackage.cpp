@@ -105,19 +105,20 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
     std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,neomdl::model::GameVersion game,
     const std::function<void(const std::string&)>& progress) {
     std::map<Key,ModulePackageInput> entries;std::vector<std::string> shadowed;
+    std::set<Key> edited;for(const auto& edit:edits)edited.insert(keyOf(edit.source));
     for(const auto& path:sources.archives) {
         progress("Reading "+neoshared::pathToUtf8(path.filename()));neoshared::erf::ErfArchive archive(path);
         for(std::size_t i=0;i<archive.count();++i) {
             const auto& resource=archive.resource(i);const Key key{neomdl::resourceKey(resource.resref),resource.restype};
             const auto filename=key.first+"."+neomdl::resourceExtension(key.second);
-            if(entries.count(key)) {shadowed.push_back(filename+" from "+neoshared::pathToUtf8(path));continue;}
+            if(edited.count(key)||entries.count(key)) {shadowed.push_back(filename+" from "+neoshared::pathToUtf8(path));continue;}
             neoshared::ResourceDocument document{neoshared::pathToUtf8(path)+"#"+filename,filename,neoshared::pathToUtf8(path),key.second,archive.read_resource(i),{path}};
             entries.emplace(key,ModulePackageInput{std::move(document),resolver});
         }
     }
     if(!looseDirectory.empty())for(const auto& file:std::filesystem::directory_iterator(looseDirectory)) {
         const auto type=neoshared::bif::resourceTypeFromExtension(neoshared::pathToUtf8(file.path().extension()),neoshared::bif::GameProfile::KotOR);
-        if(type&&file.is_regular_file()) {auto source=looseResource(file.path());const auto key=keyOf(source);entries.insert_or_assign(key,ModulePackageInput{std::move(source),resolver});}
+        if(type&&!edited.count({neomdl::resourceKey(neoshared::pathToUtf8(file.path().stem())),*type})&&file.is_regular_file()) {auto source=looseResource(file.path());const auto key=keyOf(source);entries.insert_or_assign(key,ModulePackageInput{std::move(source),resolver});}
     }
     for(const auto& path:sources.extraFiles) {auto source=looseResource(path);const auto key=keyOf(source);entries.insert_or_assign(key,ModulePackageInput{std::move(source),resolver});}
     for(auto& edit:edits) {const auto key=keyOf(edit.source);entries.insert_or_assign(key,std::move(edit));}

@@ -68,6 +68,7 @@ void ShopPreview::cacheControl(const GffStruct& control) {
     if(const auto* t=field<GffStruct>(control,"TEXT")) {const auto name=string(*t,"FONT");font(name.empty()?"dialogfont16x16":name);}
 }
 void ShopPreview::load(const std::string& layout,const neomdl::ResourceResolver& resolver,const std::filesystem::path& talkTable,neomdl::model::GameVersion game) {
+    neomdl::ResourceLoadScope loading(neomdl::resourceLoadJob());
     clear();resolver_=resolver;game_=game;tlk_.load(talkTable);
     auto source=resolver_(layout,2047).value();layout_.LoadBytes(source.bytes);sources_.push_back(source.fileName+" — "+source.sourceDescription);
     fontScale_=game==neomdl::model::GameVersion::Kotor1?extent(*layout_.root()).m_height*1.3/768:1;
@@ -78,6 +79,7 @@ void ShopPreview::load(const std::string& layout,const neomdl::ResourceResolver&
     font("fnt_d16x16");firstRow_=0;Refresh();
 }
 void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver& resolver,int selected) {
+    neomdl::ResourceLoadScope loading(neomdl::resourceLoadJob());
     resolver_=resolver;items_.clear();selection_=selected;
     if(!loaded())return;
     neomdl::detail::AreaLoadTables tables{resolver,{}};

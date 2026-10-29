@@ -564,6 +564,7 @@ private:
     Resource& openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver);
     void editBlueprint();
     void refreshBlueprintEditor();
+    bool blueprintChanged(const EditState& state) const;
     bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.source.bytes;
@@ -802,6 +803,12 @@ void ModuleEditor::refreshBlueprintEditor() {
     if(blueprintEditor_&&blueprintEditor_->IsShown())blueprintEditor_->refresh(*resources_.at(blueprintKey_).model->gff().root(),moduleResources());
 }
 
+bool ModuleEditor::blueprintChanged(const EditState& state) const {
+    return blueprintEditor_&&blueprintEditor_->IsShown()&&std::any_of(resources_.begin(),resources_.end(),[&](const auto& entry){
+        return (entry.first==blueprintKey_||entry.first.second==2025)&&entry.second.source.bytes!=state.bytes.at(entry.first);
+    });
+}
+
 EditState ModuleEditor::captureEdit(const std::string& action) const {
     EditState state;
     for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.source.bytes);
@@ -847,26 +854,33 @@ void ModuleEditor::recordEdit(const std::string& action) {
     auto state=captureEdit(action);
     const auto& current=history_[historyIndex_];
     if(state.bytes==current.bytes&&state.imports==current.imports)return;
+    const bool blueprint=blueprintChanged(current);
     history_.erase(history_.begin()+historyIndex_+1,history_.end());
     history_.push_back(std::move(state));++historyIndex_;
     updateDirty();updateActions();
-    refreshBlueprintEditor();
+    if(blueprint)refreshBlueprintEditor();
 }
 
 void ModuleEditor::restoreEdit(std::size_t index) {
     canvas_->cancelAreaPolygon();
     canvas_->cancelAreaGizmo();
     const auto& state=history_.at(index);
+    const bool blueprint=blueprintChanged(state);
     selecting_=true;
     for(auto& [key,resource]:resources_) {
-        resource.source.bytes=state.bytes.at(key);
-        resource.model->gff().LoadBytes(resource.source.bytes);writeResource(staging_,resource.source);
+        if(resource.source.bytes!=state.bytes.at(key)) {
+            resource.source.bytes=state.bytes.at(key);
+            resource.model->gff().LoadBytes(resource.source.bytes);writeResource(staging_,resource.source);
+        }
     }
     refreshAreaControls();
+    for(const auto& [key,source]:state.templates) {
+        const auto previous=addedTemplates_.find(key);
+        if(!resources_.count(key)&&(previous==addedTemplates_.end()||previous->second.bytes!=source.bytes))writeResource(staging_,source);
+    }
     addedTemplates_=state.templates;importedTemplates_=state.imports;
     templateOrigins_=state.origins;
     inlineSources_=state.inlineSources;
-    for(const auto& [key,source]:addedTemplates_)writeResource(staging_,source);
     historyIndex_=index;selectedPath_=state.path;
     const auto areaChanged=areaName()!=state.area;areas_->SetStringSelection(wxui::toWx(state.area));
     if(areaChanged) {canvas_->clearArea();previewCurrent_=false;ownerPaths_.clear();pathOwners_.clear();}
@@ -874,7 +888,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     const auto selected=objects_->GetSelection();
     if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
     selecting_=false;requestPreview();
-    refreshBlueprintEditor();
+    if(blueprint)refreshBlueprintEditor();
     setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
 }
 
@@ -1487,16 +1501,14 @@ bool ModuleEditor::saveResources() {
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
     std::vector<std::filesystem::path> exports;
-    for(const auto& [key,resource]:resources_)if(exportsResource(key))exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
+    for(const auto& [key,resource]:resources_)if(editableResource(key.second))exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
     for(const auto& [key,source]:addedTemplates_)exports.push_back(neoshared::pathFromUtf8(source.fileName));
     for(const auto& file:exports) {
         const auto destination=directory/file;
         validateHostOutput(destination);neoshared::checkResourceOutput(destination,inputs_);
     }
-    bool overwrite=false;
-    for(const auto& file:exports)overwrite|=std::filesystem::exists(directory/file);
+    const bool overwrite=std::any_of(exports.begin(),exports.end(),[&](const auto& file){return std::filesystem::exists(directory/file);});
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
-    for(auto& [key,resource]:resources_)if(resource.model->dirty())stage(resource);
     for(const auto& file:exports)std::filesystem::copy_file(staging_/file,directory/file,std::filesystem::copy_options::overwrite_existing);
     saved();setModuleStatusText("Saved module resources to "+neosettings::pathToWx(directory));return true;
 }
@@ -1510,9 +1522,8 @@ bool ModuleEditor::saveArchive() {
     const auto path=neosettings::pathFromWx(dialog.GetPath());
     validateHostOutput(path);neoshared::checkResourceOutput(path,inputs_);
     neoshared::erf::ErfArchive archive(archivePath_);
-    for(auto& [key,resource]:resources_)if(resource.model->dirty())stage(resource);
     for(auto& [key,resource]:resources_) {
-        if(!exportsResource(key))continue;
+        if(!editableResource(key.second))continue;
         archive.add_resource(staging_/neoshared::pathFromUtf8(resource.source.fileName),true);
     }
     for(const auto& [key,source]:addedTemplates_)archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
@@ -1540,7 +1551,7 @@ bool ModuleEditor::packageModule() {
         return game(name,type);
     };
     std::vector<ModulePackageInput> edits;
-    for(auto& [key,resource]:resources_)if(exportsResource(key)) {if(resource.model->dirty())stage(resource);edits.push_back({resource.source,resolve});}
+    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.push_back({resource.source,resolve});
     for(const auto& [key,source]:addedTemplates_)edits.push_back({source,templateOrigins_.at(key)});
     std::vector<ModulePackageInput> inlineSources;for(const auto& [identity,source]:inlineSources_)inlineSources.push_back(source);
     ModulePackage package;
