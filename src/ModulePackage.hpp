@@ -27,7 +27,7 @@ struct ModulePackage {
 std::optional<ModulePackageSources> chooseModulePackageSources(wxWindow* parent,
     std::vector<std::filesystem::path> archives,const std::filesystem::path& looseDirectory,bool dark);
 ModulePackage collectModulePackage(const ModulePackageSources& sources,const std::filesystem::path& looseDirectory,
-    std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,
+    std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,neomdl::model::GameVersion game,
     const std::function<void(const std::string&)>& progress);
 
 }

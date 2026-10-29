@@ -178,6 +178,7 @@ void ObjectPalette::setPlacementEnabled(bool enabled) {
     place_->Enable(enabled&&row!=-1);
     const auto type=selectedType();const bool polygon=type==2032||type==2040;
     triggerSize_->Enable(polygon);draw_->Enable(enabled&&polygon);
+    heading_->SetToolTip(type==2040?"Rotate the encounter footprint. K2 also uses this for the initial spawn facing; K1 ignores spawn facing.":"Heading in degrees about the world Z axis.");
 }
 std::optional<std::uint16_t> ObjectPalette::selectedType() const {
     const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);

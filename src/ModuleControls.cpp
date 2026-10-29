@@ -14,6 +14,13 @@
 #include <map>
 
 namespace neotoolkit {
+namespace {
+int localizedId(const neogff::GffLocalizedStringField* field,int selected) {
+    int id=selected;
+    if(selected==0&&field)for(const auto& text:field->substrings)if(text.stringid==0||text.stringid==1)id=text.stringid;
+    return id;
+}
+}
 
 ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
     std::function<void(AreaAction,std::size_t,const std::string&)> areaEdit)
@@ -22,10 +29,10 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
     auto* pages=new wxSimplebook(this);wxScrolledWindow* page[4];wxBoxSizer* content[4];
     const char* names[]={"Properties","Event scripts","Clock","Area list"};
     const char* notes[]={
-        "Module identity and entry area. Move or rotate the entry marker in Objects to change the spawn transform.",
+        "Module identity and entry reference. Move or rotate the entry marker in Objects to change the spawn transform. Embedded text takes precedence over TLK text; English is ungendered.",
         "Compiled script resource names, without an extension. Packaging collects referenced scripts and dialogues.",
         "Dawn, dusk and minutes per hour control the world clock (0 minutes uses the engine's 5-minute default). Start date/time fields are read from saved games; normal transitions carry the current world time.",
-        "Area references in module.ifo. The engine initially loads the first entry. Removing a reference keeps its resource files."};
+        "K1/K2 load only the first area entry. The entry-area reference is separate. Removing a reference keeps its resource files."};
     for(int i=0;i<4;++i) {
         category->Append(names[i]);page[i]=new wxScrolledWindow(pages);page[i]->SetScrollRate(0,FromDIP(12));
         content[i]=new wxBoxSizer(wxVERTICAL);page[i]->SetSizer(content[i]);pages->AddPage(page[i],names[i]);
@@ -35,7 +42,7 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
     box->Add(category,0,wxEXPAND|wxALL,5);box->Add(pages,1,wxEXPAND);
     for(const auto& item:std::vector<std::pair<const char*,const char*>>{{"Mod_Name","Name"},{"Mod_Description","Description"}}) {
         const auto index=localized_.size();LocalizedRow row;row.field=item.first;row.label=item.second;
-        content[0]->Add(new wxStaticText(page[0],wxID_ANY,wxui::toWx(row.label+" TLK reference (-1 = embedded)")),0,wxALL,5);
+        content[0]->Add(new wxStaticText(page[0],wxID_ANY,wxui::toWx(row.label+" TLK reference (-1 = none)")),0,wxALL,5);
         row.reference=new wxTextCtrl(page[0],wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxTE_PROCESS_ENTER);
         content[0]->Add(row.reference,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
         row.language=new wxChoice(page[0],wxID_ANY);content[0]->Add(row.language,0,wxEXPAND|wxLEFT|wxRIGHT,5);
@@ -53,7 +60,9 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
             auto& r=localized_[index];
             if(r.text->IsModified()) {
                 r.text->DiscardEdits();
-                try {edit_(r.field+"(lang"+std::to_string(r.ids.at(r.language->GetSelection()))+")","CExoLocString",wxui::toStd(r.text->GetValue()),r.label+" text");}
+                const auto* field=static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(r.field));
+                const auto id=localizedId(field,r.ids.at(r.language->GetSelection()));
+                try {edit_(r.field+"(lang"+std::to_string(id)+")","CExoLocString",wxui::toStd(r.text->GetValue()),r.label+" text");}
                 catch(const std::exception& e){wxui::showError(this,e);}
             }
             event.Skip();
@@ -78,9 +87,22 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
         {2,"Mod_StartHour","BYTE","Saved hour"},{2,"Mod_StartMinute","WORD","Saved minute"},
         {2,"Mod_StartSecond","WORD","Saved second"},{2,"Mod_StartMiliSec","WORD","Saved millisecond"}
     };
+    const std::map<std::string,std::string> clockNotes={
+        {"Mod_MinPerHour","BYTE 0..255. The engine interprets 0 as 5 real minutes per game hour."},
+        {"Mod_DawnHour","BYTE 0..255, compared directly with the world hour. No 23-hour clamp is applied."},
+        {"Mod_DuskHour","BYTE 0..255, compared directly with the world hour. No 23-hour clamp is applied."},
+        {"Mod_StartYear","DWORD 0..4294967295. engine converts values above 32000 to calendar year 1340."},
+        {"Mod_StartMonth","BYTE 0..255. Calendar months are 1..12; engine converts other values to June."},
+        {"Mod_StartDay","BYTE 0..255. Months have 28 days; engine converts other day values to day 1."},
+        {"Mod_StartHour","BYTE 0..255. engine converts values above 23 to hour 23."},
+        {"Mod_StartMinute","WORD 0..65535. engine converts values above 59 to minute 59."},
+        {"Mod_StartSecond","WORD 0..65535. engine converts values above 59 to 56 seconds."},
+        {"Mod_StartMiliSec","WORD 0..65535, added directly to the time offset without a 999-millisecond clamp."}
+    };
     for(const auto& c:controls) {
         auto* label=new wxStaticText(page[c.page],wxID_ANY,c.label);label->Wrap(FromDIP(195));content[c.page]->Add(label,0,wxLEFT|wxRIGHT|wxTOP,5);
         auto* text=new wxTextCtrl(page[c.page],wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxTE_PROCESS_ENTER);
+        if(const auto note=clockNotes.find(c.field);note!=clockNotes.end())text->SetToolTip(wxui::toWx(note->second));
         content[c.page]->Add(text,0,wxEXPAND|wxALL,5);rows_.push_back({c.field,c.type,c.label,text});const auto index=rows_.size()-1;
         text->Bind(wxEVT_TEXT_ENTER,[this,index](wxCommandEvent&){apply(rows_[index]);});
         text->Bind(wxEVT_KILL_FOCUS,[this,index](wxFocusEvent& event){if(rows_[index].text->IsModified())apply(rows_[index]);event.Skip();});
@@ -121,8 +143,11 @@ void ModuleControls::load(const neogff::GffStruct* root,const std::vector<std::s
         const auto id=selected==wxNOT_FOUND?0:row.ids.at(selected);
         const auto* field=root?static_cast<const neogff::GffLocalizedStringField*>(root->GetFieldByLabel(row.field)):nullptr;
         std::map<int,std::string> choices;
-        for(const auto& [language,name]:languages)for(int gender=0;gender<2;++gender)choices[language*2+gender]=name+(gender?" / female":" / male");
-        if(field)for(const auto& text:field->substrings)choices.emplace(text.stringid,"String ID "+std::to_string(text.stringid));
+        for(const auto& [language,name]:languages) {
+            if(language==0)choices[0]=name;
+            else for(int gender=0;gender<2;++gender)choices[language*2+gender]=name+(gender?" / female":" / male");
+        }
+        if(field)for(const auto& text:field->substrings)if(text.stringid!=1)choices.emplace(text.stringid,"String ID "+std::to_string(text.stringid));
         choices.emplace(id,"String ID "+std::to_string(id));
         row.language->Clear();row.ids.clear();
         for(const auto& [key,name]:choices) {row.ids.push_back(key);row.language->Append(wxui::toWx(name));}
@@ -144,7 +169,7 @@ void ModuleControls::apply(const Row& row) {
 }
 void ModuleControls::showLocalized(std::size_t index) {
     auto& row=localized_[index];const auto* field=root_?static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(row.field)):nullptr;
-    row.text->ChangeValue(field?wxui::toWx(field->GetStringById(row.ids.at(row.language->GetSelection()))):wxString{});row.text->DiscardEdits();
+    row.text->ChangeValue(field?wxui::toWx(field->GetStringById(localizedId(field,row.ids.at(row.language->GetSelection())))):wxString{});row.text->DiscardEdits();
 }
 void ModuleControls::updateAreaActions() {
     const auto selected=areas_->GetSelection();const bool selection=root_&&selected!=wxNOT_FOUND;

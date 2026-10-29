@@ -30,13 +30,14 @@ neoshared::ResourceDocument looseResource(const Path& path) {
 std::vector<std::string> scriptLiterals(const std::vector<std::uint8_t>& code) {
     // NCS V1.0: 13-byte header, then opcode/auxiliary-byte instructions.
     // Lengths and CONST-string layout follow nwvmachineinternal.cpp.
-    constexpr std::array<std::size_t,45> lengths{{8,2,8,6,5,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,6,2,6,6,6,2,8,2,6,6,6,8,8,6,6,2,2,10,2}};
+    constexpr std::array<std::size_t,44> lengths{{8,2,8,6,5,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,6,2,6,6,6,2,8,2,6,6,6,8,8,6,6,2,2,10}};
     std::vector<std::string> strings;
     for(std::size_t offset=13;offset<code.size();) {
         const auto opcode=code.at(offset),type=code.at(offset+1);auto length=lengths.at(std::size_t(opcode)-1);
         if(opcode==4&&type==5) {
             const auto size=(std::size_t(code.at(offset+2))<<8u)|code.at(offset+3);length=4+size;
             std::string value;for(std::size_t i=0;i<size;++i)value.push_back(char(code.at(offset+4+i)));
+            value.erase(std::find(value.begin(),value.end(),'\0'),value.end());
             strings.push_back(std::move(value));
         } else if((opcode==11||opcode==12)&&type==36)length=4;
         offset+=length;
@@ -101,7 +102,7 @@ std::optional<ModulePackageSources> chooseModulePackageSources(wxWindow* parent,
 }
 
 ModulePackage collectModulePackage(const ModulePackageSources& sources,const Path& looseDirectory,
-    std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,
+    std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,neomdl::model::GameVersion game,
     const std::function<void(const std::string&)>& progress) {
     std::map<Key,ModulePackageInput> entries;std::vector<std::string> shadowed;
     for(const auto& path:sources.archives) {
@@ -123,8 +124,8 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
     const auto originalCount=entries.size();std::vector<Key> queue;for(const auto& [key,entry]:entries)queue.push_back(key);
     std::set<std::string> missing;std::vector<std::string> dependencies;
     const auto add=[&](const std::string& value,std::uint16_t type,const neomdl::ResourceResolver& resolve,bool required) {
-        if(value.empty()||value=="****")return;
-        const Key key{neomdl::resourceKey(value),type};if(entries.count(key))return;
+        const Key key{neomdl::resourceKey(value.substr(0,std::min<std::size_t>(value.find('\0'),16))),type};
+        if(key.first.empty()||key.first=="****"||entries.count(key))return;
         const auto filename=key.first+"."+neomdl::resourceExtension(type);
         if(auto source=resolve(key.first,key.second)) {
             missing.erase(filename);dependencies.push_back(filename);queue.push_back(key);
@@ -137,13 +138,12 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
         const auto key=keyOf(entry.source);const auto& resolve=entry.dependencies;
         progress("Collecting dependencies: "+entry.source.fileName);
         if(key.second==2010) {
-            for(const auto& name:scriptLiterals(entry.source.bytes))if(!name.empty()&&name.size()<=16)
+            for(const auto& name:scriptLiterals(entry.source.bytes))
                 for(const auto type:{2010,2029,2025,2027,2032,2035,2040,2042,2044,2051})add(name,std::uint16_t(type),resolve,false);
         } else if(std::find(gffTypes.begin(),gffTypes.end(),key.second)!=gffTypes.end()) {
             neogff::GffFile file;file.LoadBytes(entry.source.bytes);
             const auto* flag=static_cast<const neogff::GffByteField*>(file.root()->GetFieldByLabel("UseTemplates"));
             const bool templateGit=key.second==2023&&flag&&flag->value!=0;
-            const bool blueprint=key.second!=2023;
             std::function<void(const neogff::GffStruct&,const std::string&)> walk;
             walk=[&](const neogff::GffStruct& record,const std::string& context) {
                 for(const auto& field:record.allFields()) {
@@ -153,9 +153,10 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                     else if(field->fieldtype==neogff::FIELD_TYPE_RESREF) {
                         const auto label=field->GetLabel(),name=field->GetString();
                         if(!templateGit&&label=="Conversation")add(name,2029,resolve,true);
-                        else if(!templateGit&&(label.find("Script")==0||label.find("Mod_On")==0||label.find("On")==0||
+                        else if(!templateGit&&(key.second!=2029||game==neomdl::model::GameVersion::Kotor2||(label!="Script2"&&label!="Active2"))&&
+                            (label.find("Script")==0||label.find("Mod_On")==0||label.find("On")==0||
                             (key.second==2029&&(label=="Active"||label=="Active2"||label=="EndConversation"||label=="EndConverAbort"))))add(name,2010,resolve,true);
-                        else if(blueprint&&(label=="EquippedRes"||label=="InventoryRes"))add(name,2025,resolve,true);
+                        else if(!templateGit&&(label=="EquippedRes"||label=="InventoryRes"))add(name,2025,resolve,true);
                         else if(!templateGit&&((context=="CreatureList"&&label=="ResRef")||label=="SpawnResRef"))add(name,2027,resolve,true);
                         else if(templateGit&&context=="StoreList"&&label=="ResRef")add(name,2051,resolve,true);
                         else if(templateGit&&label=="TemplateResRef") {
@@ -172,6 +173,7 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
     ModulePackage result;std::size_t scripts=0,dialogues=0;
     for(auto& [key,entry]:entries) {scripts+=key.second==2010;dialogues+=key.second==2029;result.resources.emplace(key,std::move(entry.source));}
     std::ostringstream report;report<<result.resources.size()<<" resources ready for MOD export\n"<<sources.archives.size()<<" input archives; "<<originalCount<<" merged/editor resources; "<<dependencies.size()<<" collected dependencies\n"<<scripts<<" compiled scripts; "<<dialogues<<" dialogues\n\n";
+    report<<"Dependency rules: "<<(game==neomdl::model::GameVersion::Kotor1?"K1":"K2")<<".\n";
     report<<"Dependency collection: "<<(sources.collectDependencies?"enabled":"disabled")<<". Runtime-constructed names and custom models, textures or audio require explicit inputs. TLK entries remain in the game's talk table.\n";
     report<<"\nUnresolved native references ("<<missing.size()<<"):\n";for(const auto& name:missing)report<<name<<'\n';
     report<<"\nCollected dependencies:\n";for(const auto& name:dependencies)report<<name<<'\n';

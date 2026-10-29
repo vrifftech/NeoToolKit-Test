@@ -58,9 +58,6 @@ void setField(neogff::GffStruct& record,std::unique_ptr<neogff::GffField> value)
     const auto found=std::find_if(fields.begin(),fields.end(),[&](const auto& field){return field->GetLabel()==value->GetLabel();});
     if(found==fields.end())record.AddField(std::move(value));else *found=std::move(value);
 }
-void mergeFields(neogff::GffStruct& destination,const neogff::GffStruct& source) {
-    for(const auto& field:source.allFields())if(!destination.GetFieldByLabel(field->GetLabel()))destination.AddField(field->Clone());
-}
 
 struct Resource {
     ResourceDocument source;
@@ -521,7 +518,7 @@ private:
     void insertObject(Vec3 position,const ObjectPlacementOptions& options,const std::vector<Vec3>& polygon={});
     std::string importTemplate(neoshared::ResourceDocument source,const neomdl::ResourceResolver& resolver);
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
-    bool expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates);
+    bool importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver);
     void requestPreview() {
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
@@ -1081,7 +1078,7 @@ std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& n
     return session_->resolve(name,type);
 }
 
-bool ModuleEditor::expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates) {
+bool ModuleEditor::importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver) {
     bool changed=false;
     for(const auto& [label,reference]:std::array<std::pair<const char*,const char*>,2>{{
             {"Equip_ItemList","EquippedRes"},{"ItemList","InventoryRes"}}}) {
@@ -1089,13 +1086,8 @@ bool ModuleEditor::expandItems(neogff::GffStruct& record,const neomdl::ResourceR
             const auto* field=item->GetFieldByLabel(reference);
             if(!field)continue;
             const auto name=neomdl::resourceKey(field->GetString());
-            auto source=resolver(name,2025).value();
-            if(templates) {
-                const auto imported=importTemplate(std::move(source),resolver);
-                if(imported!=name) {setField(*item,std::make_unique<neogff::GffResRefField>(reference,imported));changed=true;}
-            } else {
-                neogff::GffFile file;file.LoadBytes(source.bytes);mergeFields(*item,*file.root());
-            }
+            const auto imported=importTemplate(resolver(name,2025).value(),resolver);
+            if(imported!=name) {setField(*item,std::make_unique<neogff::GffResRefField>(reference,imported));changed=true;}
         }
     }
     if(auto* creatures=static_cast<neogff::GffList*>(record.GetFieldByLabel("CreatureList")))for(auto& creature:creatures->allStructs()) {
@@ -1111,7 +1103,7 @@ std::string ModuleEditor::importTemplate(ResourceDocument source,const neomdl::R
     if(const auto found=importedTemplates_.find(identity);found!=importedTemplates_.end())return found->second;
     const auto key=resourceKey(source);
     neogff::GffFile file;file.LoadBytes(source.bytes);
-    const auto changed=expandItems(*file.root(),resolver,true);
+    const auto changed=importItemReferences(*file.root(),resolver);
     const auto existing=sceneTemplate(key.first,key.second);
     if(!changed&&existing&&existing->bytes==source.bytes) {
         importedTemplates_[identity]=key.first;return key.first;
@@ -1177,7 +1169,7 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     }
     instance->typeid_=kind.structure;
     const auto reference=templates&&kind.type!=2058?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
-    if(!templates) {expandItems(*instance,resolver,false);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
+    if(!templates) {importItemReferences(*instance,resolver);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
     setField(*instance,std::make_unique<neogff::GffResRefField>(kind.reference,reference));
     const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
     number(kind.shortCoordinates?"X":"XPosition",position.x);
@@ -1208,7 +1200,7 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
         if(encounter) {
             auto spawns=std::make_unique<neogff::GffList>("SpawnPointList");auto spawn=std::make_unique<neogff::GffStruct>();spawn->typeid_=0;
             spawn->AddField(std::make_unique<neogff::GffFloatField>("X",position.x));spawn->AddField(std::make_unique<neogff::GffFloatField>("Y",position.y));
-            spawn->AddField(std::make_unique<neogff::GffFloatField>("Z",position.z));spawn->AddField(std::make_unique<neogff::GffFloatField>("Orientation",angle));
+            spawn->AddField(std::make_unique<neogff::GffFloatField>("Z",position.z));spawn->AddField(std::make_unique<neogff::GffFloatField>("Orientation",-angle));
             spawns->AddStruct(std::move(spawn));setField(*instance,std::move(spawns));
         }
     }
@@ -1407,7 +1399,7 @@ bool ModuleEditor::packageModule() {
     ModulePackage package;
     {
         wxProgressDialog progress("Package module","Collecting module resources...",100,this,wxPD_APP_MODAL|wxPD_ELAPSED_TIME);
-        package=collectModulePackage(*sources,localDirectory_,std::move(edits),inlineSources,resolve,[&](const std::string& text){progress.Pulse(wxui::toWx(text));});
+        package=collectModulePackage(*sources,localDirectory_,std::move(edits),inlineSources,resolve,game_,[&](const std::string& text){progress.Pulse(wxui::toWx(text));});
     }
     wxDialog review(this,wxID_ANY,"Module package contents",wxDefaultPosition,FromDIP(wxSize(760,520)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
     auto* box=new wxBoxSizer(wxVERTICAL);box->Add(new wxTextCtrl(&review,wxID_ANY,wxui::toWx(package.report),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);
