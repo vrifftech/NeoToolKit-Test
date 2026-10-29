@@ -34,7 +34,8 @@ using Key=std::pair<std::string,std::uint16_t>;
 constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
-      ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject};
+      ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
+      ID_ModuleUndo,ID_ModuleRedo};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -73,6 +74,18 @@ struct Preview {
     neomdl::AreaScene scene;
     std::shared_ptr<neomdl::GameResourceSession> session;
 };
+struct EditState {
+    std::map<Key,std::vector<std::uint8_t>> bytes;
+    std::map<Key,ResourceDocument> templates;
+    std::map<std::string,std::string> imports;
+    std::string area,path,identity,action;
+};
+
+void writeResource(const std::filesystem::path& directory,const ResourceDocument& source) {
+    std::ofstream output;output.exceptions(std::ios::failbit|std::ios::badbit);
+    output.open(directory/neoshared::pathFromUtf8(source.fileName),std::ios::binary|std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(source.bytes.data()),source.bytes.size());
+}
 
 class ModuleEditor final : public ModuleEditorPanel {
 public:
@@ -83,6 +96,7 @@ public:
         const std::pair<int,const char*> actions[]={{ID_OpenModule,"Open module..."},
             {ID_ModuleAssets,"Game resources..."},{ID_RefreshArea,"Refresh 3D"},
             {ID_AddObject,"Add object..."},
+            {ID_ModuleUndo,"Undo"},{ID_ModuleRedo,"Redo"},
             {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_SceneReport,"Scene report..."}};
         for(const auto& action:actions)tools->Add(new wxButton(this,action.first,action.second),0,wxALL,3);
         root->Add(tools,0,wxEXPAND|wxALL,4);
@@ -122,11 +136,21 @@ public:
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
-        canvas_=new neomdl::ui::ModelCanvas(split_);
+        auto* viewport=new wxPanel(split_);auto* viewBox=new wxBoxSizer(wxVERTICAL);
+        auto* gizmoTools=new wxBoxSizer(wxHORIZONTAL);
+        gizmoTools->Add(new wxStaticText(viewport,wxID_ANY,"Tool"),0,wxALIGN_CENTER_VERTICAL|wxALL,6);
+        gizmoTool_=new wxChoice(viewport,wxID_ANY);
+        for(const auto* tool:{"Select (Q)","Move (W)","Rotate (E)"})gizmoTool_->Append(tool);
+        gizmoTool_->SetSelection(0);gizmoTools->Add(gizmoTool_,0,wxALL,4);
+        gizmoHint_=new wxStaticText(viewport,wxID_ANY,"Select an object, then choose Move or Rotate.",
+            wxDefaultPosition,wxDefaultSize,wxST_ELLIPSIZE_END);
+        gizmoHint_->SetMinSize(FromDIP(wxSize(100,-1)));
+        gizmoTools->Add(gizmoHint_,1,wxALIGN_CENTER_VERTICAL|wxALL,6);viewBox->Add(gizmoTools,0,wxEXPAND);
+        canvas_=new neomdl::ui::ModelCanvas(viewport);viewBox->Add(canvas_,1,wxEXPAND);viewport->SetSizer(viewBox);
         palette_->installDropTarget(canvas_,[this](wxPoint point){return dropObject(point);},[this]{return canPlaceObject();});
         createFields();
         split_->SetMinimumPaneSize(FromDIP(260));split_->SetSashGravity(0.55);
-        split_->SplitVertically(canvas_,fields_,FromDIP(520));
+        split_->SplitVertically(viewport,fields_,FromDIP(520));
         outer_->SetMinimumPaneSize(FromDIP(190));outer_->SplitVertically(inspector,split_,FromDIP(240));
         root->Add(outer_,1,wxEXPAND);
         SetSizer(root);createModuleStatusBar(1);
@@ -147,9 +171,12 @@ public:
         });
         areas_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
             selectedPath_.clear();pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;
-            canvas_->clearArea();rebuildObjects();activateAreaResource();requestPreview();
+            canvas_->clearArea();rebuildObjects();activateAreaResource();rememberSelection();requestPreview();
         });
-        objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);});
+        objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);rememberSelection();});
+        gizmoTool_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
+            canvas_->cancelAreaGizmo();palette_->stopPlacing();updateActions();
+        });
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
             if(event.GetSelection()==0)palette_->stopPlacing();
             event.Skip();
@@ -161,8 +188,13 @@ public:
             const auto found=ownerPaths_.find(wxui::toStd(event.GetString()));
             if(found==ownerPaths_.end())selectObject(wxNOT_FOUND,false);
             else selectObject(findPlacement(found->second),true);
+            rememberSelection();
         });
-        palette_->Bind(EVT_OBJECT_PLACEMENT_MODE,[this](wxCommandEvent&){updatePlacementCursor();});
+        palette_->Bind(EVT_OBJECT_PLACEMENT_MODE,[this](wxCommandEvent&){
+            if(palette_->placing())canvas_->cancelAreaGizmo();
+            updateActions();
+        });
+        canvas_->Bind(neomdl::ui::EVT_AREA_GIZMO,[this](neomdl::ui::AreaGizmoEvent& event){gizmoChanged(event);});
         canvas_->Bind(wxEVT_LEFT_DOWN,[this](wxMouseEvent& event){
             if(palette_->placing()) {canvas_->SetFocus();dropObject(event.GetPosition());}
             else event.Skip();
@@ -171,7 +203,14 @@ public:
             if(palette_->placing())palette_->stopPlacing();else event.Skip();
         });
         canvas_->Bind(wxEVT_CHAR_HOOK,[this](wxKeyEvent& event){
-            if(event.GetKeyCode()==WXK_ESCAPE&&palette_->placing())palette_->stopPlacing();else event.Skip();
+            if(event.GetKeyCode()==WXK_ESCAPE) {
+                if(palette_->placing())palette_->stopPlacing();
+                else if(canvas_->areaGizmoDragging())canvas_->cancelAreaGizmo();
+                else event.Skip();
+            } else if(!event.HasAnyModifiers()&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->freeFlyCameraActive()&&
+                (event.GetKeyCode()=='Q'||event.GetKeyCode()=='W'||event.GetKeyCode()=='E')) {
+                gizmoTool_->SetSelection(event.GetKeyCode()=='Q'?0:event.GetKeyCode()=='W'?1:2);updateActions();
+            } else event.Skip();
         });
         Bind(wxEVT_TIMER,[this](wxTimerEvent&){tick();});timer_.Start(33);
         updateActions();
@@ -188,6 +227,7 @@ public:
     }
     std::vector<std::filesystem::path> openPaths() const override {return inputs_;}
     bool canClose() override {
+        canvas_->cancelAreaGizmo();
         requested_=false;cancel_->store(true);
         if(loading_.valid()) {
             loading_.wait();loading_=std::future<Preview>{};canvas_->setLoading(false);
@@ -284,17 +324,18 @@ private:
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent& event){
             try {
                 auto& resource=resources_.at(identityKeys_.at(wxui::toStd(event.GetString())));
-                stage(resource);rebuildObjects();requestPreview();updateActions();
+                stage(resource);rebuildObjects();recordEdit("Edit field");requestPreview();
             } catch(const std::exception& e) {wxui::showError(this,e);}
         });
         fields_->Bind(neogff::ui::EVT_GFF_FIELD_SELECTED,[this](wxCommandEvent& event){
             if(selecting_)return;
             const auto path=wxui::toStd(event.GetString()),identity=fields_->activeResourceIdentity();
+            rememberSelection();
             for(std::size_t i=0;i<placements_.size();++i) {
                 const auto& p=placements_[i];
                 if(p.identity==identity&&((!p.path.empty()&&(path==p.path||path.find(p.path+"\\")==0))||
                     (p.coordinates==Placement::Coordinates::Entry&&path.find("Mod_Entry_")==0))) {
-                    selectObject(int(i),false);return;
+                    selectObject(int(i),false);rememberSelection();return;
                 }
             }
         });
@@ -310,6 +351,9 @@ private:
         file->Append(ID_SaveResources,"Save Resources...\tCtrl+S");
         file->Append(ID_SaveModule,"Save Archive Copy...\tCtrl+Shift+S");
         menus->Append(file,"Module");
+        editMenu_=new wxMenu;
+        editMenu_->Append(ID_ModuleUndo,"Undo\tCtrl+Z");editMenu_->Append(ID_ModuleRedo,"Redo\tCtrl+Y");
+        menus->Append(editMenu_,"Edit");
         auto* objects=new wxMenu;
         objects->Append(ID_AddObject,"Add Object from Game Files...");
         objects->Append(ID_FrameArea,"Frame Area");objects->Append(ID_FrameObject,"Frame Selected Object");
@@ -332,9 +376,7 @@ private:
             identityKeys_[resource.source.identity]=key;
             inputs_.insert(inputs_.end(),resource.source.protectedInputs.begin(),resource.source.protectedInputs.end());
             fields_->openResource(resource.source);resource.model=fields_->activeModel();
-            std::ofstream output;output.exceptions(std::ios::failbit|std::ios::badbit);
-            output.open(staging_/neoshared::pathFromUtf8(resource.source.fileName),std::ios::binary|std::ios::trunc);
-            output.write(reinterpret_cast<const char*>(resource.source.bytes.data()),resource.source.bytes.size());
+            writeResource(staging_,resource.source);
             if(key.second==kGit||key.second==kAre)names.insert(key.first);
         }
         for(const auto& name:names)areas_->Append(wxui::toWx(name));
@@ -343,7 +385,11 @@ private:
         auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+title,title,game_);
         canvas_->setDocument(document.get());document_=std::move(document);
         sourceTitle_=title;
-        rebuildObjects();activateAreaResource();selecting_=false;setAppearance(dark_,scale_);updateActions();
+        history_.clear();historyIndex_=0;
+        savedBytes_.clear();savedTemplateKeys_.clear();
+        for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.source.bytes);
+        rebuildObjects();activateAreaResource();selecting_=false;
+        history_.push_back(captureEdit());setAppearance(dark_,scale_);updateActions();
         setModuleStatusText("Module loaded. Edit a field or choose Game resources to load the 3D view.");
     }
     std::string areaName() const {return wxui::toStd(areas_->GetStringSelection());}
@@ -370,6 +416,14 @@ private:
         return wxNOT_FOUND;
     }
     void applyTransform();
+    void previewTransform(const Placement& placement,Vec3 position,float heading);
+    void gizmoChanged(const neomdl::ui::AreaGizmoEvent& event);
+    void updateGizmo();
+    EditState captureEdit(const std::string& action={}) const;
+    void rememberSelection();
+    void recordEdit(const std::string& action);
+    void restoreEdit(std::size_t index);
+    void updateDirty();
     void duplicateObject();
     void deleteObject();
     void chooseAssets();
@@ -380,6 +434,7 @@ private:
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
     bool expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates);
     void requestPreview() {
+        canvas_->cancelAreaGizmo();
         ++revision_;cancel_->store(true);
         if(previewEnabled_) {requested_=true;due_=Clock::now()+std::chrono::milliseconds(200);}
         updateActions();
@@ -390,8 +445,9 @@ private:
     bool saveResources();
     bool saveArchive();
     void saved() {
-        templatesDirty_=false;
-        for(auto& [key,resource]:resources_)resource.model->gff().dirty(false);
+        for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.source.bytes;
+        savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
+        updateDirty();
         fields_->refreshActiveDocument();updateActions();
     }
     void updateActions() {
@@ -399,7 +455,14 @@ private:
         palette_->setPlacementEnabled(canPlaceObject());updatePlacementCursor();
         enableModuleCommand(ID_AddObject,loaded);FindWindow(ID_AddObject)->Enable(loaded);
         gameChoice_->Enable(loaded);
-        const bool editing=!requested_&&!loading_.valid();
+        const bool editing=!requested_&&!loading_.valid()&&!canvas_->areaGizmoDragging();
+        const bool undo=!canvas_->areaGizmoDragging()&&!history_.empty()&&historyIndex_>0;
+        const bool redo=!canvas_->areaGizmoDragging()&&!history_.empty()&&historyIndex_+1<history_.size();
+        enableModuleCommand(ID_ModuleUndo,undo);FindWindow(ID_ModuleUndo)->Enable(undo);
+        enableModuleCommand(ID_ModuleRedo,redo);FindWindow(ID_ModuleRedo)->Enable(redo);
+        editMenu_->SetLabel(ID_ModuleUndo,wxui::toWx(undo?"Undo "+history_[historyIndex_].action+"\tCtrl+Z":"Undo\tCtrl+Z"));
+        editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
+        gizmoTool_->Enable(editing&&loaded);
         for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport}) {
             enableModuleCommand(id,loaded);if(auto* control=FindWindow(id))control->Enable(loaded);
         }
@@ -412,6 +475,7 @@ private:
         apply_->Enable(selected&&editing);for(auto* control:transform_)control->Enable(selected&&editing);
         if(selected)transform_[3]->Enable(editing&&placements_[objects_->GetSelection()].rotation!=Placement::Rotation::None);
         if(loaded)sourceLabel_->SetLabel(wxui::toWx(sourceTitle_+(dirty()?" *":"")));
+        updateGizmo();
     }
     void command(wxCommandEvent& event) {
         try {
@@ -424,6 +488,8 @@ private:
             }
             case ID_ModuleAssets:chooseAssets();return;
             case ID_AddObject:objectTabs_->SetSelection(1);return;
+            case ID_ModuleUndo:restoreEdit(historyIndex_-1);return;
+            case ID_ModuleRedo:restoreEdit(historyIndex_+1);return;
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
@@ -453,11 +519,15 @@ private:
     wxStaticText* sourceLabel_{};wxChoice* areas_{};wxChoice* gameChoice_{};wxListBox* objects_{};
     wxTextCtrl* transform_[4]{};wxButton* apply_{};
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
+    wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     std::unique_ptr<wxMenuBar> fieldMenus_;
     std::map<Key,Resource> resources_;
     std::map<Key,ResourceDocument> addedTemplates_;
     std::map<std::string,std::string> importedTemplates_;
     bool templatesDirty_{};
+    std::vector<EditState> history_;std::size_t historyIndex_{};
+    std::map<Key,std::vector<std::uint8_t>> savedBytes_;
+    std::set<Key> savedTemplateKeys_;
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path archivePath_,localDirectory_,staging_;
@@ -479,6 +549,100 @@ private:
     double scale_{1.0};wxTimer timer_;
     Clock::time_point due_,lastFrame_{Clock::now()};
 };
+
+EditState ModuleEditor::captureEdit(const std::string& action) const {
+    EditState state;
+    for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.source.bytes);
+    state.templates=addedTemplates_;state.imports=importedTemplates_;
+    state.area=areaName();state.path=selectedPath_;state.identity=fields_->activeResourceIdentity();state.action=action;
+    return state;
+}
+
+void ModuleEditor::rememberSelection() {
+    if(history_.empty())return;
+    auto& state=history_[historyIndex_];
+    state.area=areaName();state.path=selectedPath_;state.identity=fields_->activeResourceIdentity();
+}
+
+void ModuleEditor::updateDirty() {
+    for(auto& [key,resource]:resources_)resource.model->gff().dirty(resource.source.bytes!=savedBytes_.at(key));
+    std::set<Key> keys;for(const auto& [key,source]:addedTemplates_)keys.insert(key);
+    templatesDirty_=keys!=savedTemplateKeys_;
+}
+
+void ModuleEditor::recordEdit(const std::string& action) {
+    auto state=captureEdit(action);
+    const auto& current=history_[historyIndex_];
+    if(state.bytes==current.bytes&&state.imports==current.imports)return;
+    history_.erase(history_.begin()+historyIndex_+1,history_.end());
+    history_.push_back(std::move(state));++historyIndex_;
+    updateDirty();updateActions();
+}
+
+void ModuleEditor::restoreEdit(std::size_t index) {
+    canvas_->cancelAreaGizmo();
+    const auto& state=history_.at(index);
+    selecting_=true;
+    for(auto& [key,resource]:resources_) {
+        resource.source.bytes=state.bytes.at(key);
+        resource.model->gff().LoadBytes(resource.source.bytes);writeResource(staging_,resource.source);
+    }
+    addedTemplates_=state.templates;importedTemplates_=state.imports;
+    for(const auto& [key,source]:addedTemplates_)writeResource(staging_,source);
+    historyIndex_=index;selectedPath_=state.path;
+    const auto areaChanged=areaName()!=state.area;areas_->SetStringSelection(wxui::toWx(state.area));
+    if(areaChanged) {canvas_->clearArea();previewCurrent_=false;ownerPaths_.clear();pathOwners_.clear();}
+    updateDirty();fields_->activateResource(state.identity);fields_->refreshActiveDocument();rebuildObjects();
+    const auto selected=objects_->GetSelection();
+    if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
+    selecting_=false;requestPreview();
+    setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
+}
+
+void ModuleEditor::updateGizmo() {
+    if(canvas_->areaGizmoDragging())return;
+    const auto selected=objects_->GetSelection();
+    const bool ready=previewCurrent_&&!requested_&&!loading_.valid()&&!palette_->placing()&&selected!=wxNOT_FOUND;
+    auto mode=static_cast<neomdl::ui::AreaGizmoMode>(gizmoTool_->GetSelection());
+    if(ready) {
+        const auto& p=placements_[selected];
+        if(mode==neomdl::ui::AreaGizmoMode::Rotate&&p.rotation==Placement::Rotation::None) {
+            canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
+            gizmoHint_->SetLabel("This object has no heading field. Use Move or edit its orientation in Fields.");return;
+        }
+        canvas_->setAreaGizmo(mode,p.position,p.heading);
+    } else canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
+    gizmoHint_->SetLabel(mode==neomdl::ui::AreaGizmoMode::Move?
+        "Drag X (red), Y (green), Z (blue), or the center for XY. Esc cancels.":
+        mode==neomdl::ui::AreaGizmoMode::Rotate?"Drag the blue ring to change heading. Esc cancels.":
+        "Select an object, then choose Move or Rotate.");
+    gizmoHint_->SetToolTip(gizmoHint_->GetLabel());
+}
+
+void ModuleEditor::gizmoChanged(const neomdl::ui::AreaGizmoEvent& event) {
+    try {
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Begin) {rememberSelection();updateActions();return;}
+        const auto& p=placements_.at(objects_->GetSelection());
+        const float values[]={event.position.x,event.position.y,event.position.z,event.heading};
+        for(std::size_t i=0;i<4;++i)transform_[i]->ChangeValue(wxui::toWx(decimal(values[i])));
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Commit)applyTransform();
+        else previewTransform(p,event.position,event.heading);
+        if(event.phase!=neomdl::ui::AreaGizmoPhase::Preview)updateActions();
+    } catch(const std::exception& e) {canvas_->cancelAreaGizmo();wxui::showError(this,e);}
+}
+
+void ModuleEditor::previewTransform(const Placement& p,Vec3 position,float heading) {
+    if(p.list=="TriggerList")canvas_->previewAreaTrigger(p.index,position,heading-p.heading);
+    if(p.list=="CameraList")canvas_->previewAreaCamera(p.index,position);
+    for(const auto& placement:canvas_->areaScene().placements()) {
+        const auto list=placement.kind==neomdl::AreaObjectKind::Creature?"Creature List":
+            placement.kind==neomdl::AreaObjectKind::Door?"Door List":"Placeable List";
+        if(p.list==list&&p.index==placement.sourceIndex&&placement.runtimeInstance) {
+            const auto orientation=heading!=p.heading?neomdl::gitBearingFrame({},heading/kDegrees).orientation:placement.frame.orientation;
+            canvas_->setSceneOwnerWorld(*placement.runtimeInstance,neomdl::model::nodeTransform(position,orientation));
+        }
+    }
+}
 
 void ModuleEditor::rebuildObjects() {
     placements_.clear();objects_->Clear();
@@ -560,6 +724,35 @@ void ModuleEditor::applyTransform() {
     const bool positionChanged=values[0]!=previous[0]||values[1]!=previous[1]||values[2]!=previous[2];
     const bool rotationChanged=p.rotation!=Placement::Rotation::None&&values[3]!=p.heading;
     if(!positionChanged&&!rotationChanged)return;
+    rememberSelection();
+    if(p.list=="TriggerList") {
+        auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
+        auto& record=*list.GetStruct(p.index);
+        const auto* original=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
+        std::unique_ptr<neogff::GffList> geometry;
+        const auto angle=rotationChanged?(values[3]-p.heading)/kDegrees:0.0f;
+        if(original&&rotationChanged) {
+            auto copy=original->Clone();geometry.reset(static_cast<neogff::GffList*>(copy.release()));
+            for(auto& point:geometry->allStructs()) {
+                const auto fields=fieldsOf(*point);const auto x=scalar(fields,"PointX"),y=scalar(fields,"PointY");
+                setField(*point,std::make_unique<neogff::GffFloatField>("PointX",x*std::cos(angle)-y*std::sin(angle)));
+                setField(*point,std::make_unique<neogff::GffFloatField>("PointY",x*std::sin(angle)+y*std::cos(angle)));
+            }
+        } else if(!original&&previewCurrent_) {
+            const auto& triggers=canvas_->areaScene().triggers();
+            const auto& trigger=*std::find_if(triggers.begin(),triggers.end(),[&](const auto& value){return value.sourceIndex==p.index;});
+            geometry=std::make_unique<neogff::GffList>("Geometry");
+            for(const auto& point:trigger.worldFootprint) {
+                const auto x=point.x-p.position.x,y=point.y-p.position.y;
+                auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",x*std::cos(angle)-y*std::sin(angle)));
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",x*std::sin(angle)+y*std::cos(angle)));
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",point.z-p.position.z));
+                geometry->AddStruct(std::move(vertex));
+            }
+        }
+        if(geometry)setField(record,std::move(geometry));
+    }
     const auto set=[&](const std::string& name,float value) {
         resource.model->setValue(p.coordinates==Placement::Coordinates::Entry?name:p.path+"\\"+name,decimal(value));
     };
@@ -578,18 +771,13 @@ void ModuleEditor::applyTransform() {
         set(p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_X":"XOrientation",-std::sin(heading));
         set(p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_Y":"YOrientation",std::cos(heading));
     }
-    for(const auto& placement:canvas_->areaScene().placements()) {
-        const auto list=placement.kind==neomdl::AreaObjectKind::Creature?"Creature List":
-            placement.kind==neomdl::AreaObjectKind::Door?"Door List":"Placeable List";
-        if(p.list==list&&p.index==placement.sourceIndex&&placement.runtimeInstance) {
-            const auto orientation=rotationChanged?neomdl::gitBearingFrame({},heading).orientation:placement.frame.orientation;
-            canvas_->setSceneOwnerWorld(*placement.runtimeInstance,neomdl::model::nodeTransform({values[0],values[1],values[2]},orientation));
-        }
-    }
-    stage(resource);fields_->refreshActiveDocument();rebuildObjects();requestPreview();
+    previewTransform(p,{values[0],values[1],values[2]},rotationChanged?values[3]:p.heading);
+    stage(resource);fields_->refreshActiveDocument();rebuildObjects();
+    recordEdit(positionChanged?(rotationChanged?"Transform object":"Move object"):"Rotate object");requestPreview();
 }
 
 void ModuleEditor::duplicateObject() {
+    rememberSelection();
     const auto p=placements_.at(objects_->GetSelection());
     auto& resource=resources_.at(identityKeys_.at(p.identity));
     auto& list=static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
@@ -602,16 +790,17 @@ void ModuleEditor::duplicateObject() {
     }
     selectedPath_=p.list+"\\"+std::to_string(list.count());
     list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));resource.model->gff().dirty(true);
-    stage(resource);fields_->refreshActiveDocument();rebuildObjects();requestPreview();
+    stage(resource);fields_->refreshActiveDocument();rebuildObjects();recordEdit("Duplicate object");requestPreview();
     selectObject(findPlacement(selectedPath_),true);
 }
 
 void ModuleEditor::deleteObject() {
     const auto p=placements_.at(objects_->GetSelection());
     if(wxMessageBox("Delete "+wxui::toWx(p.label)+"?","Delete GIT object",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return;
+    rememberSelection();
     auto& resource=resources_.at(identityKeys_.at(p.identity));
     resource.model->deleteField(p.path);selectedPath_.clear();
-    stage(resource);fields_->refreshActiveDocument();rebuildObjects();requestPreview();
+    stage(resource);fields_->refreshActiveDocument();rebuildObjects();recordEdit("Delete object");requestPreview();
 }
 
 std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& name,std::uint16_t type) const {
@@ -685,6 +874,7 @@ bool ModuleEditor::dropObject(wxPoint point) {
         position->z+=options.zOffset;
         const auto blueprint=palette_->selectedBlueprint();
         const auto resolver=palette_->selectedResources();
+        rememberSelection();
         const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return value.type==blueprint.type;});
         auto& resource=resources_.at({areaName(),kGit});
         auto& root=*resource.model->gff().root();
@@ -724,7 +914,8 @@ bool ModuleEditor::dropObject(wxPoint point) {
         auto& list=dynamic_cast<neogff::GffList&>(*root.GetFieldByLabel(kind.list));
         selectedPath_=std::string(kind.list)+"\\"+std::to_string(list.count());
         list.AddStruct(std::move(instance));resource.model->gff().dirty(true);
-        stage(resource);rebuildObjects();selectObject(findPlacement(selectedPath_),true);requestPreview();
+        stage(resource);fields_->refreshActiveDocument();rebuildObjects();selectObject(findPlacement(selectedPath_),true);
+        recordEdit("Place object");requestPreview();
         setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position->x)+", "+decimal(position->y)+", "+decimal(position->z)));
         return true;
     } catch(const std::exception& e) {wxui::showError(this,e);return false;}
