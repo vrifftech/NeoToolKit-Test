@@ -4,6 +4,7 @@
 #include "ModuleControls.hpp"
 #include "ModulePackage.hpp"
 #include "BlueprintEditor.hpp"
+#include "CameraControls.hpp"
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
@@ -167,6 +168,12 @@ public:
             rebuildObjects();refreshModuleControls();recordEdit("Edit module "+label);requestPreview();
         },[this](ModuleControls::AreaAction action,std::size_t index,const std::string& name){editModuleAreaList(action,index,name);});
         objectTabs_->AddPage(moduleControls_,"Module");
+        CameraControls::Actions cameraActions;
+        cameraActions.direction=[this](float yaw,float pitch){canvas_->setViewerOrientation(yaw,pitch);updateActions();};
+        cameraActions.select=[this](std::size_t index){selectObject(findPlacement("CameraList\\"+std::to_string(index)),true);rememberSelection();};
+        cameraActions.preview=[this](std::optional<neomdl::AreaCameraRecord> camera){previewCamera(std::move(camera));};
+        cameraActions.edit=[this](const neomdl::AreaCameraRecord& camera){editCamera(camera);};
+        cameraControls_=new CameraControls(objectTabs_,std::move(cameraActions));objectTabs_->AddPage(cameraControls_,"Cameras");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -212,14 +219,16 @@ public:
         Bind(wxEVT_BUTTON,[this](wxCommandEvent& event){command(event);});
         gameChoice_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
             if(blueprintEditor_)blueprintEditor_->clear();
+            cameraControls_->stopPreview();
             game_=gameChoice_->GetSelection()==0?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
             install_.reset();session_.reset();
             palette_->clear();paletteSession_.reset();
             auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
             canvas_->setDocument(document.get());document_=std::move(document);
-            pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;refreshAreaControls();requestPreview();
+            pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;refreshAreaControls();refreshCameraControls();requestPreview();
         });
         areas_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
+            cameraControls_->stopPreview();cameraControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
             selectedPath_.clear();pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;
             canvas_->clearArea();rebuildObjects();activateAreaResource();refreshAreaControls();rememberSelection();requestPreview();
         });
@@ -440,6 +449,7 @@ private:
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
         if(blueprintEditor_)blueprintEditor_->clear();
+        cameraControls_->stopPreview();cameraControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
         areaControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
         moduleControls_->load(nullptr,{});
         palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templateOrigins_.clear();inlineSources_.clear();templatesDirty_=false;
@@ -491,6 +501,9 @@ private:
         return wxNOT_FOUND;
     }
     void applyTransform();
+    void refreshCameraControls();
+    void previewCamera(std::optional<neomdl::AreaCameraRecord> camera);
+    void editCamera(const neomdl::AreaCameraRecord& camera);
     void refreshAreaControls() {
         controlsArea_=areaName();const auto resource=resources_.find({controlsArea_,kAre});
         areaControls_->load(resource==resources_.end()?nullptr:resource->second.model->gff().root(),game_==neomdl::model::GameVersion::Kotor2);
@@ -526,7 +539,7 @@ private:
     void duplicateObject();
     void deleteObject();
     void chooseAssets();
-    bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&
+    bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing()&&
         !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
     void updatePlacementCursor() {canvas_->SetCursor(wxCursor(palette_->placing()&&canPlaceObject()?wxCURSOR_CROSS:wxCURSOR_ARROW));}
     bool dropObject(wxPoint point);
@@ -576,6 +589,7 @@ private:
         objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         moduleControls_->Enable(loaded&&!busy);
+        cameraControls_->Enable(loaded&&!busy);cameraControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
@@ -657,6 +671,7 @@ private:
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     AreaControls* areaControls_{};std::string controlsArea_;
     ModuleControls* moduleControls_{};
+    CameraControls* cameraControls_{};
     BlueprintEditor* blueprintEditor_{};Key blueprintKey_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
@@ -692,6 +707,36 @@ private:
     double scale_{1.0};wxTimer timer_;
     Clock::time_point due_,lastFrame_{Clock::now()};
 };
+
+void ModuleEditor::refreshCameraControls() {
+    const auto resource=resources_.find({areaName(),kGit});
+    cameraControls_->load(resource==resources_.end()?nullptr:resource->second.model->gff().root(),game_==neomdl::model::GameVersion::Kotor2);
+    if(previewCurrent_&&!requested_&&!loading_.valid()) {
+        if(cameraControls_->previewing())previewCamera(cameraControls_->pendingCamera());
+        else canvas_->previewAreaCameras(cameraControls_->records());
+    }
+}
+
+void ModuleEditor::previewCamera(std::optional<neomdl::AreaCameraRecord> camera) {
+    canvas_->cancelAreaPolygon();canvas_->cancelAreaGizmo();palette_->stopPlacing();
+    if(camera) {
+        auto records=cameraControls_->records();records.at(camera->sourceIndex)=*camera;
+        canvas_->previewAreaCameras(records,camera->sourceIndex);
+    } else canvas_->useViewerCamera(false);
+    updateActions();
+}
+
+void ModuleEditor::editCamera(const neomdl::AreaCameraRecord& camera) {
+    rememberSelection();auto& resource=resources_.at({areaName(),kGit});
+    auto& list=static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel("CameraList"));auto copy=list.GetStruct(camera.sourceIndex)->Clone();auto& record=static_cast<neogff::GffStruct&>(*copy);
+    setField(record,std::make_unique<neogff::GffIntField>("CameraID",camera.cameraId));
+    setField(record,std::make_unique<neogff::GffPositionField>("Position",camera.position.x,camera.position.y,camera.position.z));
+    setField(record,std::make_unique<neogff::GffOrientationField>("Orientation",camera.orientation.w,camera.orientation.x,camera.orientation.y,camera.orientation.z));
+    for(const auto& [name,value]:std::array<std::pair<const char*,float>,4>{{{"Pitch",camera.pitch},{"Height",camera.height},{"FieldOfView",camera.fieldOfView},{"MicRange",camera.microphoneRange}}})setField(record,std::make_unique<neogff::GffFloatField>(name,value));
+    list.allStructs().at(camera.sourceIndex).reset(static_cast<neogff::GffStruct*>(copy.release()));resource.model->gff().dirty(true);stage(resource);
+    fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField("CameraList\\"+std::to_string(camera.sourceIndex));
+    rebuildObjects();recordEdit("Edit camera");
+}
 
 neomdl::ResourceResolver ModuleEditor::moduleResources() const {
     std::map<Key,ResourceDocument> edits;
@@ -836,7 +881,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
 void ModuleEditor::updateGizmo() {
     if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing())return;
     const auto selected=objects_->GetSelection();
-    const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid();
+    const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
     const bool ready=sceneReady&&!palette_->placing()&&selected!=wxNOT_FOUND;
     std::vector<neomdl::ui::AreaEditorMarker> markers;
     if(sceneReady)for(const auto& p:placements_) {
@@ -1029,6 +1074,7 @@ void ModuleEditor::rebuildObjects() {
         }
     }
     for(const auto& placement:placements_)objects_->Append(wxui::toWx(placement.label));
+    refreshCameraControls();
     selectObject(findPlacement(selectedPath_),false);
 }
 
@@ -1038,6 +1084,10 @@ void ModuleEditor::selectObject(int index,bool selectField) {
     canvas_->setSelectedAreaOwners(pathOwners_[selectedPath_]);
     if(index!=wxNOT_FOUND) {
         const auto& p=placements_[index];
+        if(p.list=="CameraList") {
+            cameraControls_->select(p.index);
+            if(cameraControls_->previewing()&&previewCurrent_&&!requested_&&!loading_.valid())previewCamera(cameraControls_->pendingCamera());
+        }
         std::string source="Inline GIT fields supply this object's properties.";
         const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
         const auto* templates=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
@@ -1337,6 +1387,7 @@ void ModuleEditor::chooseAssets() {
     auto installation=neoshared::game::inspectGameInstallation(neosettings::pathFromWx(directory->GetValue()),id);
     if(!installation)throw std::runtime_error("Choose a K1 or K2 installation containing chitin.key and its game data.");
     if(blueprintEditor_)blueprintEditor_->clear();
+    cameraControls_->stopPreview();
     install_=std::move(installation);session_.reset();moduleName_=neomdl::resourceKey(wxui::toStd(scope->GetValue()));
     palette_->clear();paletteSession_.reset();
     session_=openModuleAssets(*install_,moduleName_);palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
@@ -1345,7 +1396,7 @@ void ModuleEditor::chooseAssets() {
     refreshAreaControls();
     auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
     canvas_->setDocument(document.get());document_=std::move(document);
-    previewCurrent_=false;previewEnabled_=true;requestPreview();
+    previewCurrent_=false;previewEnabled_=true;refreshCameraControls();requestPreview();
 }
 
 void ModuleEditor::startPreview() {
@@ -1403,6 +1454,7 @@ void ModuleEditor::tick() {
             if(loadingRevision_==revision_) {
                 session_=std::move(result.session);
                 canvas_->installArea(std::move(result.scene),{},previewCurrent_);previewCurrent_=true;
+                if(cameraControls_->previewing())previewCamera(cameraControls_->pendingCamera());
                 applyAreaPreviewPhase();
                 if(session_&&paletteSession_!=session_) {
                     palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
@@ -1427,6 +1479,7 @@ void ModuleEditor::tick() {
     }
     const auto now=Clock::now();const auto elapsed=std::chrono::duration<float>(now-lastFrame_).count();lastFrame_=now;
     if(previewCurrent_&&!loading_.valid()&&IsShownOnScreen())canvas_->advance(elapsed);
+    if(cameraControls_->previewing()&&!loading_.valid()&&!requested_&&!canvas_->cameraScene().activeAreaCamera()) {cameraControls_->stopPreview();updateActions();}
 }
 
 bool ModuleEditor::saveResources() {
