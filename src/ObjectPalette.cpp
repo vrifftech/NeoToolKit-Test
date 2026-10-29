@@ -2,6 +2,7 @@
 #include "NeoWxUi.hpp"
 #include <gff/Common.hpp>
 #include <wx/choice.h>
+#include <wx/button.h>
 #include <wx/dataobj.h>
 #include <wx/listctrl.h>
 #include <wx/srchctrl.h>
@@ -14,6 +15,7 @@
 
 namespace neotoolkit {
 wxDEFINE_EVENT(EVT_OBJECT_PLACEMENT_MODE,wxCommandEvent);
+wxDEFINE_EVENT(EVT_TRIGGER_POLYGON_REQUESTED,wxCommandEvent);
 namespace {
 wxDataFormat blueprintFormat() {return wxDataFormat("application/x-neotoolkit-blueprint");}
 std::vector<std::uint16_t> objectTypes() {
@@ -63,6 +65,10 @@ ObjectPalette::ObjectPalette(wxWindow* parent):wxPanel(parent) {
     triggerSize_=new wxTextCtrl(this,wxID_ANY,"2");options->Add(triggerSize_,1,wxEXPAND);
     box->Add(options,0,wxEXPAND|wxALL,5);
     place_=new wxToggleButton(this,wxID_ANY,"Click map to place");box->Add(place_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
+    draw_=new wxButton(this,wxID_ANY,"Draw trigger polygon");box->Add(draw_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
+    draw_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
+        wxCommandEvent event(EVT_TRIGGER_POLYGON_REQUESTED,GetId());event.SetEventObject(this);ProcessWindowEvent(event);
+    });
     auto* hint=new wxStaticText(this,wxID_ANY,"Drag a template onto the map, or enable click placement. Esc cancels.");
     hint->Wrap(FromDIP(220));box->Add(hint,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
     SetSizer(box);
@@ -171,6 +177,11 @@ void ObjectPalette::setPlacementEnabled(bool enabled) {
     const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
     place_->Enable(enabled&&row!=-1);
     triggerSize_->Enable(row!=-1&&blueprints_.at(entries_->GetItemData(row)).type==2032);
+    draw_->Enable(enabled&&selectedType()==2032);
+}
+std::optional<std::uint16_t> ObjectPalette::selectedType() const {
+    const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+    return row==-1?std::nullopt:std::optional<std::uint16_t>{blueprints_.at(entries_->GetItemData(row)).type};
 }
 bool ObjectPalette::placing() const {return place_->GetValue();}
 void ObjectPalette::stopPlacing() {place_->SetValue(false);placementModeChanged();}

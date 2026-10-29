@@ -12,6 +12,7 @@ class wxSearchCtrl;
 class wxStaticText;
 class wxTextCtrl;
 class wxToggleButton;
+class wxButton;
 
 namespace neotoolkit {
 
@@ -40,6 +41,7 @@ struct ObjectPlacementOptions {
 };
 
 wxDECLARE_EVENT(EVT_OBJECT_PLACEMENT_MODE,wxCommandEvent);
+wxDECLARE_EVENT(EVT_TRIGGER_POLYGON_REQUESTED,wxCommandEvent);
 
 class ObjectPalette final : public wxPanel {
 public:
@@ -53,6 +55,7 @@ public:
     neoshared::ResourceDocument selectedBlueprint() const;
     neomdl::ResourceResolver selectedResources() const;
     ObjectPlacementOptions placementOptions() const;
+    std::optional<std::uint16_t> selectedType() const;
     void installDropTarget(wxWindow* viewport,std::function<bool(wxPoint)> drop,std::function<bool()> ready);
 private:
     void selectScope();
@@ -63,6 +66,7 @@ private:
     wxListCtrl* entries_{};wxSearchCtrl* search_{};wxToggleButton* place_{};
     wxTextCtrl* heading_{};wxTextCtrl* height_{};wxTextCtrl* triggerSize_{};
     wxStaticText* heightLabel_{};wxStaticText* summary_{};
+    wxButton* draw_{};
     std::shared_ptr<neomdl::GameResourceSession> active_,selected_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path directory_;

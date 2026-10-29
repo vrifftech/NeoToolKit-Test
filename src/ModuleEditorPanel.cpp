@@ -35,7 +35,7 @@ constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
-      ID_ModuleUndo,ID_ModuleRedo};
+      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -129,7 +129,7 @@ public:
         objectBox->Add(apply_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
         auto* objectTools=new wxWrapSizer(wxHORIZONTAL);
         for(const auto& action:std::vector<std::pair<int,const char*>>{{ID_FrameObject,"Frame"},
-                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"}})
+                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"}})
             objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
         objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
         palette_=new ObjectPalette(objectTabs_);objectTabs_->AddPage(objectPage,"Objects");objectTabs_->AddPage(palette_,"Add objects");
@@ -137,15 +137,30 @@ public:
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
         auto* viewport=new wxPanel(split_);auto* viewBox=new wxBoxSizer(wxVERTICAL);
-        auto* gizmoTools=new wxBoxSizer(wxHORIZONTAL);
+        auto* gizmoTools=new wxWrapSizer(wxHORIZONTAL);
         gizmoTools->Add(new wxStaticText(viewport,wxID_ANY,"Tool"),0,wxALIGN_CENTER_VERTICAL|wxALL,6);
         gizmoTool_=new wxChoice(viewport,wxID_ANY);
-        for(const auto* tool:{"Select (Q)","Move (W)","Rotate (E)"})gizmoTool_->Append(tool);
+        for(const auto* tool:{"Select (Q)","Move (W)","Rotate (E)","Trigger vertices (R)"})gizmoTool_->Append(tool);
         gizmoTool_->SetSelection(0);gizmoTools->Add(gizmoTool_,0,wxALL,4);
+        gizmoTools->Add(new wxButton(viewport,ID_FinishPolygon,"Finish polygon"),0,wxALL,4);
+        gizmoTools->Add(new wxButton(viewport,ID_CancelPolygon,"Cancel polygon"),0,wxALL,4);
         gizmoHint_=new wxStaticText(viewport,wxID_ANY,"Select an object, then choose Move or Rotate.",
-            wxDefaultPosition,wxDefaultSize,wxST_ELLIPSIZE_END);
+            wxDefaultPosition,wxDefaultSize,wxST_ELLIPSIZE_END|wxST_NO_AUTORESIZE);
         gizmoHint_->SetMinSize(FromDIP(wxSize(100,-1)));
-        gizmoTools->Add(gizmoHint_,1,wxALIGN_CENTER_VERTICAL|wxALL,6);viewBox->Add(gizmoTools,0,wxEXPAND);
+        viewBox->Add(gizmoTools,0,wxEXPAND);viewBox->Add(gizmoHint_,0,wxEXPAND|wxALL,6);
+        auto* snaps=new wxWrapSizer(wxHORIZONTAL);
+        snaps->Add(new wxStaticText(viewport,wxID_ANY,"Grid"),0,wxALIGN_CENTER_VERTICAL|wxALL,5);
+        gridSnap_=new wxChoice(viewport,wxID_ANY);
+        for(const auto* step:{"Off","0.1","0.25","0.5","1","2"})gridSnap_->Append(step);
+        gridSnap_->SetSelection(0);snaps->Add(gridSnap_,0,wxALL,3);
+        gridSnap_->SetToolTip("World units for placement, move handles and trigger vertices. Off preserves free movement.");
+        snaps->Add(new wxStaticText(viewport,wxID_ANY,"Rotation (degrees)"),0,wxALIGN_CENTER_VERTICAL|wxALL,5);
+        rotationSnap_=new wxChoice(viewport,wxID_ANY);
+        for(const auto* step:{"Off","5","15","30","45","90"})rotationSnap_->Append(step);
+        rotationSnap_->SetSelection(0);snaps->Add(rotationSnap_,0,wxALL,3);
+        walkmeshSnap_=new wxCheckBox(viewport,wxID_ANY,"Walkmesh");snaps->Add(walkmeshSnap_,0,wxALIGN_CENTER_VERTICAL|wxALL,5);
+        walkmeshSnap_->SetToolTip("Snap placement, XY movement and polygon vertices to walkable WOK faces. Z handles remain independent.");
+        viewBox->Add(snaps,0,wxEXPAND);
         canvas_=new neomdl::ui::ModelCanvas(viewport);viewBox->Add(canvas_,1,wxEXPAND);viewport->SetSizer(viewBox);
         palette_->installDropTarget(canvas_,[this](wxPoint point){return dropObject(point);},[this]{return canPlaceObject();});
         createFields();
@@ -156,7 +171,7 @@ public:
         SetSizer(root);createModuleStatusBar(1);
         const auto temp=wxFileName::CreateTempFileName("NeoToolKit-module");
         staging_=neosettings::pathFromWx(temp);std::filesystem::remove(staging_);std::filesystem::create_directory(staging_);
-        neomdl::ui::RenderOptions options;options.showCameras=true;options.previewTriggers=true;
+        neomdl::ui::RenderOptions options;options.previewTriggers=true;
         canvas_->setOptions(options);
         buildMenus();
         Bind(wxEVT_MENU,[this](wxCommandEvent& event){command(event);});
@@ -175,8 +190,13 @@ public:
         });
         objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);rememberSelection();});
         gizmoTool_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
-            canvas_->cancelAreaGizmo();palette_->stopPlacing();updateActions();
+            canvas_->cancelAreaPolygon();canvas_->cancelAreaGizmo();palette_->stopPlacing();updateActions();
         });
+        const auto snapping=[this](wxCommandEvent&){
+            const float grids[]={0,0.1f,0.25f,0.5f,1,2},angles[]={0,5,15,30,45,90};
+            canvas_->setAreaSnapping({grids[gridSnap_->GetSelection()],angles[rotationSnap_->GetSelection()],walkmeshSnap_->GetValue()});
+        };
+        gridSnap_->Bind(wxEVT_CHOICE,snapping);rotationSnap_->Bind(wxEVT_CHOICE,snapping);walkmeshSnap_->Bind(wxEVT_CHECKBOX,snapping);
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
             if(event.GetSelection()==0)palette_->stopPlacing();
             event.Skip();
@@ -195,6 +215,13 @@ public:
             updateActions();
         });
         canvas_->Bind(neomdl::ui::EVT_AREA_GIZMO,[this](neomdl::ui::AreaGizmoEvent& event){gizmoChanged(event);});
+        canvas_->Bind(neomdl::ui::EVT_AREA_MARKER_PICKED,[this](wxCommandEvent& event){
+            selectObject(findPlacement(wxui::toStd(event.GetString())),true);rememberSelection();
+        });
+        canvas_->Bind(neomdl::ui::EVT_AREA_POLYGON,[this](neomdl::ui::AreaPolygonEvent& event){polygonChanged(event);});
+        palette_->Bind(EVT_TRIGGER_POLYGON_REQUESTED,[this](wxCommandEvent&){
+            try {beginTriggerDrawing(true);}catch(const std::exception& e){wxui::showError(this,e);}
+        });
         canvas_->Bind(wxEVT_LEFT_DOWN,[this](wxMouseEvent& event){
             if(palette_->placing()) {canvas_->SetFocus();dropObject(event.GetPosition());}
             else event.Skip();
@@ -205,11 +232,13 @@ public:
         canvas_->Bind(wxEVT_CHAR_HOOK,[this](wxKeyEvent& event){
             if(event.GetKeyCode()==WXK_ESCAPE) {
                 if(palette_->placing())palette_->stopPlacing();
+                else if(canvas_->areaPolygonDrawing()||canvas_->areaPolygonDragging())canvas_->cancelAreaPolygon();
                 else if(canvas_->areaGizmoDragging())canvas_->cancelAreaGizmo();
                 else event.Skip();
-            } else if(!event.HasAnyModifiers()&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->freeFlyCameraActive()&&
-                (event.GetKeyCode()=='Q'||event.GetKeyCode()=='W'||event.GetKeyCode()=='E')) {
-                gizmoTool_->SetSelection(event.GetKeyCode()=='Q'?0:event.GetKeyCode()=='W'?1:2);updateActions();
+            } else if(!event.HasAnyModifiers()&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->areaPolygonDrawing()&&
+                !canvas_->areaPolygonDragging()&&!canvas_->freeFlyCameraActive()&&
+                (event.GetKeyCode()=='Q'||event.GetKeyCode()=='W'||event.GetKeyCode()=='E'||event.GetKeyCode()=='R')) {
+                gizmoTool_->SetSelection(event.GetKeyCode()=='Q'?0:event.GetKeyCode()=='W'?1:event.GetKeyCode()=='E'?2:3);updateActions();
             } else event.Skip();
         });
         Bind(wxEVT_TIMER,[this](wxTimerEvent&){tick();});timer_.Start(33);
@@ -227,6 +256,7 @@ public:
     }
     std::vector<std::filesystem::path> openPaths() const override {return inputs_;}
     bool canClose() override {
+        canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
         requested_=false;cancel_->store(true);
         if(loading_.valid()) {
@@ -358,6 +388,7 @@ private:
         objects->Append(ID_AddObject,"Add Object from Game Files...");
         objects->Append(ID_FrameArea,"Frame Area");objects->Append(ID_FrameObject,"Frame Selected Object");
         objects->Append(ID_DuplicateObject,"Duplicate Selected Object");objects->Append(ID_DeleteObject,"Delete Selected Object");
+        objects->Append(ID_RedrawTrigger,"Redraw Selected Trigger Footprint");
         menus->Append(objects,"Objects");
         fieldMenus_=fields_->takeMenus();
         for(std::size_t i=0;i<fieldMenus_->GetMenuCount();) {
@@ -419,6 +450,9 @@ private:
     void previewTransform(const Placement& placement,Vec3 position,float heading);
     void gizmoChanged(const neomdl::ui::AreaGizmoEvent& event);
     void updateGizmo();
+    void beginTriggerDrawing(bool create);
+    void polygonChanged(const neomdl::ui::AreaPolygonEvent& event);
+    void writeTriggerGeometry(const Placement& placement,const std::vector<Vec3>& points,int vertex);
     EditState captureEdit(const std::string& action={}) const;
     void rememberSelection();
     void recordEdit(const std::string& action);
@@ -427,13 +461,16 @@ private:
     void duplicateObject();
     void deleteObject();
     void chooseAssets();
-    bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&resources_.count({areaName(),kGit})!=0;}
+    bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&
+        !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
     void updatePlacementCursor() {canvas_->SetCursor(wxCursor(palette_->placing()&&canPlaceObject()?wxCURSOR_CROSS:wxCURSOR_ARROW));}
     bool dropObject(wxPoint point);
+    void insertObject(Vec3 position,const ObjectPlacementOptions& options,const std::vector<Vec3>& polygon={});
     std::string importTemplate(neoshared::ResourceDocument source,const neomdl::ResourceResolver& resolver);
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
     bool expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates);
     void requestPreview() {
+        canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
         ++revision_;cancel_->store(true);
         if(previewEnabled_) {requested_=true;due_=Clock::now()+std::chrono::milliseconds(200);}
@@ -455,18 +492,24 @@ private:
         palette_->setPlacementEnabled(canPlaceObject());updatePlacementCursor();
         enableModuleCommand(ID_AddObject,loaded);FindWindow(ID_AddObject)->Enable(loaded);
         gameChoice_->Enable(loaded);
-        const bool editing=!requested_&&!loading_.valid()&&!canvas_->areaGizmoDragging();
-        const bool undo=!canvas_->areaGizmoDragging()&&!history_.empty()&&historyIndex_>0;
-        const bool redo=!canvas_->areaGizmoDragging()&&!history_.empty()&&historyIndex_+1<history_.size();
+        const bool busy=canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing();
+        const bool editing=!requested_&&!loading_.valid()&&!busy;
+        const bool undo=!busy&&!history_.empty()&&historyIndex_>0;
+        const bool redo=!busy&&!history_.empty()&&historyIndex_+1<history_.size();
         enableModuleCommand(ID_ModuleUndo,undo);FindWindow(ID_ModuleUndo)->Enable(undo);
         enableModuleCommand(ID_ModuleRedo,redo);FindWindow(ID_ModuleRedo)->Enable(redo);
         editMenu_->SetLabel(ID_ModuleUndo,wxui::toWx(undo?"Undo "+history_[historyIndex_].action+"\tCtrl+Z":"Undo\tCtrl+Z"));
         editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
         gizmoTool_->Enable(editing&&loaded);
+        objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
+        gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
+        FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
+        const bool trigger=selected&&placements_[objects_->GetSelection()].list=="TriggerList"&&previewCurrent_&&editing;
+        enableModuleCommand(ID_RedrawTrigger,trigger);FindWindow(ID_RedrawTrigger)->Enable(trigger);
         for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport}) {
-            enableModuleCommand(id,loaded);if(auto* control=FindWindow(id))control->Enable(loaded);
+            enableModuleCommand(id,loaded&&!busy);if(auto* control=FindWindow(id))control->Enable(loaded&&!busy);
         }
-        const bool archive=loaded&&!archivePath_.empty();
+        const bool archive=loaded&&!archivePath_.empty()&&!busy;
         enableModuleCommand(ID_SaveModule,archive);FindWindow(ID_SaveModule)->Enable(archive);
         for(const auto id:{ID_FrameObject,ID_DuplicateObject,ID_DeleteObject}) {
             const bool enabled=selected&&(id==ID_FrameObject||(editing&&placements_[objects_->GetSelection()].coordinates!=Placement::Coordinates::Entry));
@@ -490,6 +533,9 @@ private:
             case ID_AddObject:objectTabs_->SetSelection(1);return;
             case ID_ModuleUndo:restoreEdit(historyIndex_-1);return;
             case ID_ModuleRedo:restoreEdit(historyIndex_+1);return;
+            case ID_RedrawTrigger:beginTriggerDrawing(false);return;
+            case ID_FinishPolygon:canvas_->finishAreaPolygon();return;
+            case ID_CancelPolygon:canvas_->cancelAreaPolygon();return;
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
@@ -520,6 +566,8 @@ private:
     wxTextCtrl* transform_[4]{};wxButton* apply_{};
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
+    wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
+    bool drawingNewTrigger_{};
     std::unique_ptr<wxMenuBar> fieldMenus_;
     std::map<Key,Resource> resources_;
     std::map<Key,ResourceDocument> addedTemplates_;
@@ -580,6 +628,7 @@ void ModuleEditor::recordEdit(const std::string& action) {
 }
 
 void ModuleEditor::restoreEdit(std::size_t index) {
+    canvas_->cancelAreaPolygon();
     canvas_->cancelAreaGizmo();
     const auto& state=history_.at(index);
     selecting_=true;
@@ -600,10 +649,26 @@ void ModuleEditor::restoreEdit(std::size_t index) {
 }
 
 void ModuleEditor::updateGizmo() {
-    if(canvas_->areaGizmoDragging())return;
+    if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing())return;
     const auto selected=objects_->GetSelection();
-    const bool ready=previewCurrent_&&!requested_&&!loading_.valid()&&!palette_->placing()&&selected!=wxNOT_FOUND;
-    auto mode=static_cast<neomdl::ui::AreaGizmoMode>(gizmoTool_->GetSelection());
+    const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid();
+    const bool ready=sceneReady&&!palette_->placing()&&selected!=wxNOT_FOUND;
+    std::vector<neomdl::ui::AreaEditorMarker> markers;
+    if(sceneReady)for(const auto& p:placements_) {
+        using Kind=neomdl::ui::AreaMarkerKind;
+        if(p.list=="WaypointList")markers.push_back({p.path,Kind::Waypoint,p.position});
+        if(p.list=="SoundList")markers.push_back({p.path,Kind::Sound,p.position});
+        if(p.list=="CameraList")markers.push_back({p.path,Kind::Camera,p.position});
+        if(p.coordinates==Placement::Coordinates::Entry)markers.push_back({p.path,Kind::Entry,p.position});
+    }
+    canvas_->setAreaMarkers(std::move(markers),selectedPath_);
+    const auto tool=gizmoTool_->GetSelection();
+    auto mode=tool<3?static_cast<neomdl::ui::AreaGizmoMode>(tool):neomdl::ui::AreaGizmoMode::None;
+    std::vector<Vec3> footprint;
+    if(ready&&placements_[selected].list=="TriggerList") {
+        for(const auto& trigger:canvas_->areaScene().triggers())if(trigger.sourceIndex==placements_[selected].index)footprint=trigger.worldFootprint;
+    }
+    canvas_->setAreaPolygon(std::move(footprint),tool==3&&ready);
     if(ready) {
         const auto& p=placements_[selected];
         if(mode==neomdl::ui::AreaGizmoMode::Rotate&&p.rotation==Placement::Rotation::None) {
@@ -612,11 +677,73 @@ void ModuleEditor::updateGizmo() {
         }
         canvas_->setAreaGizmo(mode,p.position,p.heading);
     } else canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
-    gizmoHint_->SetLabel(mode==neomdl::ui::AreaGizmoMode::Move?
+    gizmoHint_->SetLabel(tool==3?"Select a trigger, then drag its yellow vertices. Redraw footprint replaces the polygon.":mode==neomdl::ui::AreaGizmoMode::Move?
         "Drag X (red), Y (green), Z (blue), or the center for XY. Esc cancels.":
         mode==neomdl::ui::AreaGizmoMode::Rotate?"Drag the blue ring to change heading. Esc cancels.":
         "Select an object, then choose Move or Rotate.");
     gizmoHint_->SetToolTip(gizmoHint_->GetLabel());
+}
+
+void ModuleEditor::beginTriggerDrawing(bool create) {
+    palette_->stopPlacing();canvas_->cancelAreaGizmo();canvas_->cancelAreaPolygon();rememberSelection();
+    drawingNewTrigger_=create;gizmoTool_->SetSelection(3);canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);
+    if(create) {
+        const auto options=palette_->placementOptions();canvas_->beginAreaPolygon(options.planeZ,options.zOffset);
+    } else canvas_->beginAreaPolygon(placements_.at(objects_->GetSelection()).position.z);
+}
+
+void ModuleEditor::writeTriggerGeometry(const Placement& p,const std::vector<Vec3>& points,int vertex) {
+    auto& resource=resources_.at(identityKeys_.at(p.identity));
+    auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel("TriggerList"));
+    auto& record=*list.GetStruct(p.index);
+    const auto* original=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
+    auto geometry=std::make_unique<neogff::GffList>("Geometry");
+    const char* labels[]={"PointX","PointY","PointZ"};
+    const float origin[]={p.position.x,p.position.y,p.position.z};
+    for(std::size_t i=0;i<points.size();++i) {
+        std::unique_ptr<neogff::GffStruct> point;
+        const bool inherited=!original||i>=original->count();
+        if(!inherited) {auto copy=original->GetStruct(i)->Clone();point.reset(static_cast<neogff::GffStruct*>(copy.release()));}
+        else {point=std::make_unique<neogff::GffStruct>();point->typeid_=3;}
+        if(vertex<0||i==std::size_t(vertex)||inherited) {
+            const float values[]={points[i].x,points[i].y,points[i].z};
+            for(std::size_t axis=0;axis<3;++axis) {
+                if(!inherited&&scalar(fieldsOf(*point),labels[axis])+origin[axis]==values[axis])continue;
+                setField(*point,std::make_unique<neogff::GffFloatField>(labels[axis],values[axis]-origin[axis]));
+            }
+        }
+        geometry->AddStruct(std::move(point));
+    }
+    setField(record,std::move(geometry));resource.model->gff().dirty(true);stage(resource);
+}
+
+void ModuleEditor::polygonChanged(const neomdl::ui::AreaPolygonEvent& event) {
+    try {
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Begin) {
+            rememberSelection();updateActions();
+            gizmoHint_->SetLabel(event.drawing?"Click corners; click the first point, double-click, or press Enter to finish. Backspace removes a corner. Esc cancels.":
+                "Drag the vertex in XY. Grid and walkmesh settings apply. Esc cancels.");
+            gizmoHint_->SetToolTip(gizmoHint_->GetLabel());return;
+        }
+        if(event.drawing) {
+            if(event.phase==neomdl::ui::AreaGizmoPhase::Commit) {
+                if(drawingNewTrigger_)insertObject(event.points.front(),palette_->placementOptions(),event.points);
+                else {
+                    const auto p=placements_.at(objects_->GetSelection());
+                    canvas_->previewAreaTriggerGeometry(p.index,event.points);writeTriggerGeometry(p,event.points,-1);
+                    fields_->refreshActiveDocument();rebuildObjects();recordEdit("Redraw trigger polygon");requestPreview();
+                }
+            } else if(event.phase==neomdl::ui::AreaGizmoPhase::Preview)
+                setModuleStatusText(wxString::Format("Trigger polygon: %zu corners. Enter finishes; Backspace removes the last corner.",event.points.size()));
+        } else {
+            const auto p=placements_.at(objects_->GetSelection());canvas_->previewAreaTriggerGeometry(p.index,event.points);
+            if(event.phase==neomdl::ui::AreaGizmoPhase::Commit) {
+                writeTriggerGeometry(p,event.points,event.vertex);fields_->refreshActiveDocument();rebuildObjects();
+                recordEdit("Move trigger vertex");requestPreview();
+            }
+        }
+        updateActions();
+    } catch(const std::exception& e) {canvas_->cancelAreaPolygon();updateActions();wxui::showError(this,e);}
 }
 
 void ModuleEditor::gizmoChanged(const neomdl::ui::AreaGizmoEvent& event) {
@@ -632,6 +759,7 @@ void ModuleEditor::gizmoChanged(const neomdl::ui::AreaGizmoEvent& event) {
 }
 
 void ModuleEditor::previewTransform(const Placement& p,Vec3 position,float heading) {
+    canvas_->moveAreaMarker(p.path,position);
     if(p.list=="TriggerList")canvas_->previewAreaTrigger(p.index,position,heading-p.heading);
     if(p.list=="CameraList")canvas_->previewAreaCamera(p.index,position);
     for(const auto& placement:canvas_->areaScene().placements()) {
@@ -868,57 +996,67 @@ bool ModuleEditor::dropObject(wxPoint point) {
     try {
         const auto options=palette_->placementOptions();
         auto position=canvas_->areaPlacementPoint(point,options.planeZ);
+        if(position)position=canvas_->snappedAreaPoint(*position);
         if(!position) {
-            setModuleStatusText("No placement intersection. Choose a surface, or set a height plane.");return false;
+            setModuleStatusText("No placement intersection for the selected surface and snapping settings.");return false;
         }
-        position->z+=options.zOffset;
-        const auto blueprint=palette_->selectedBlueprint();
-        const auto resolver=palette_->selectedResources();
-        rememberSelection();
-        const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return value.type==blueprint.type;});
-        auto& resource=resources_.at({areaName(),kGit});
-        auto& root=*resource.model->gff().root();
-        const auto* flag=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
-        const bool templates=flag&&flag->value!=0;
-        neogff::GffFile file;file.LoadBytes(blueprint.bytes);
-        auto instance=std::make_unique<neogff::GffStruct>();
-        if(!templates||kind.type==2058) {
-            auto copy=file.root()->Clone();instance.reset(static_cast<neogff::GffStruct*>(copy.release()));
-        } else for(const auto* name:{"Tag","LinkedTo","LinkedToModule","LinkedToFlags","TransitionDestin",
-                "OpenState","AnimationState","UseTweakColor","TweakColor"})
-            if(const auto* field=file.root()->GetFieldByLabel(name))instance->AddField(field->Clone());
-        instance->typeid_=kind.structure;
-        const auto reference=templates?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
-        if(!templates)expandItems(*instance,resolver,false);
-        setField(*instance,std::make_unique<neogff::GffResRefField>("TemplateResRef",reference));
-        const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
-        number(kind.shortCoordinates?"X":"XPosition",position->x);
-        number(kind.shortCoordinates?"Y":"YPosition",position->y);
-        number(kind.shortCoordinates?"Z":"ZPosition",position->z);
-        const auto angle=options.heading/kDegrees;
-        if(kind.bearing)number("Bearing",angle);
-        else if(kind.type!=2035) {number("XOrientation",-std::sin(angle));number("YOrientation",std::cos(angle));number("ZOrientation",0.0f);}
-        if(kind.type==2035)setField(*instance,std::make_unique<neogff::GffUInt32Field>("GeneratedType",0));
-        if(kind.type==2032) {
-            auto geometry=std::make_unique<neogff::GffList>("Geometry");
-            const auto half=options.triggerSize*0.5f;
-            for(const auto& point:std::array<std::array<float,2>,4>{{{{-half,-half}},{{half,-half}},{{half,half}},{{-half,half}}}}) {
-                auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
-                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",point[0]*std::cos(angle)-point[1]*std::sin(angle)));
-                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",point[0]*std::sin(angle)+point[1]*std::cos(angle)));
-                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",0.0f));geometry->AddStruct(std::move(vertex));
-            }
-            setField(*instance,std::move(geometry));
-        }
-        if(!root.GetFieldByLabel(kind.list))root.AddField(std::make_unique<neogff::GffList>(kind.list));
-        auto& list=dynamic_cast<neogff::GffList&>(*root.GetFieldByLabel(kind.list));
-        selectedPath_=std::string(kind.list)+"\\"+std::to_string(list.count());
-        list.AddStruct(std::move(instance));resource.model->gff().dirty(true);
-        stage(resource);fields_->refreshActiveDocument();rebuildObjects();selectObject(findPlacement(selectedPath_),true);
-        recordEdit("Place object");requestPreview();
-        setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position->x)+", "+decimal(position->y)+", "+decimal(position->z)));
-        return true;
+        position->z+=options.zOffset;insertObject(*position,options);return true;
     } catch(const std::exception& e) {wxui::showError(this,e);return false;}
+}
+
+void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& options,const std::vector<Vec3>& polygon) {
+    const auto blueprint=palette_->selectedBlueprint();
+    const auto resolver=palette_->selectedResources();
+    rememberSelection();
+    const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return value.type==blueprint.type;});
+    auto& resource=resources_.at({areaName(),kGit});
+    auto& root=*resource.model->gff().root();
+    const auto* flag=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+    const bool templates=flag&&flag->value!=0;
+    neogff::GffFile file;file.LoadBytes(blueprint.bytes);
+    auto instance=std::make_unique<neogff::GffStruct>();
+    if(!templates||kind.type==2058) {
+        auto copy=file.root()->Clone();instance.reset(static_cast<neogff::GffStruct*>(copy.release()));
+    } else for(const auto* name:{"Tag","LinkedTo","LinkedToModule","LinkedToFlags","TransitionDestin",
+            "OpenState","AnimationState","UseTweakColor","TweakColor"})
+        if(const auto* field=file.root()->GetFieldByLabel(name))instance->AddField(field->Clone());
+    instance->typeid_=kind.structure;
+    const auto reference=templates?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
+    if(!templates)expandItems(*instance,resolver,false);
+    setField(*instance,std::make_unique<neogff::GffResRefField>("TemplateResRef",reference));
+    const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
+    number(kind.shortCoordinates?"X":"XPosition",position.x);
+    number(kind.shortCoordinates?"Y":"YPosition",position.y);
+    number(kind.shortCoordinates?"Z":"ZPosition",position.z);
+    const auto angle=canvas_->snappedAreaHeading(options.heading)/kDegrees;
+    if(kind.bearing)number("Bearing",angle);
+    else if(kind.type!=2035) {number("XOrientation",-std::sin(angle));number("YOrientation",std::cos(angle));number("ZOrientation",0.0f);}
+    if(kind.type==2035)setField(*instance,std::make_unique<neogff::GffUInt32Field>("GeneratedType",0));
+    if(kind.type==2032) {
+        auto geometry=std::make_unique<neogff::GffList>("Geometry");
+        auto points=polygon;
+        for(auto& point:points) {point.x-=position.x;point.y-=position.y;point.z-=position.z;}
+        if(points.empty()) {
+            const auto half=options.triggerSize*0.5f;
+            for(const auto& p:std::array<std::array<float,2>,4>{{{{-half,-half}},{{half,-half}},{{half,half}},{{-half,half}}}})
+                points.push_back({p[0]*std::cos(angle)-p[1]*std::sin(angle),p[0]*std::sin(angle)+p[1]*std::cos(angle),0.0f});
+        }
+        for(const auto& point:points) {
+            auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",point.x));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",point.y));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",point.z));
+            geometry->AddStruct(std::move(vertex));
+        }
+        setField(*instance,std::move(geometry));
+    }
+    if(!root.GetFieldByLabel(kind.list))root.AddField(std::make_unique<neogff::GffList>(kind.list));
+    auto& list=dynamic_cast<neogff::GffList&>(*root.GetFieldByLabel(kind.list));
+    selectedPath_=std::string(kind.list)+"\\"+std::to_string(list.count());
+    list.AddStruct(std::move(instance));resource.model->gff().dirty(true);
+    stage(resource);fields_->refreshActiveDocument();rebuildObjects();selectObject(findPlacement(selectedPath_),true);
+    recordEdit("Place object");requestPreview();
+    setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position.x)+", "+decimal(position.y)+", "+decimal(position.z)));
 }
 
 void ModuleEditor::chooseAssets() {
