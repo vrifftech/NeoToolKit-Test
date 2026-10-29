@@ -460,7 +460,6 @@ private:
             identityKeys_[resource.source.identity]=key;
             inputs_.insert(inputs_.end(),resource.source.protectedInputs.begin(),resource.source.protectedInputs.end());
             fields_->openResource(resource.source);resource.model=fields_->activeModel();
-            writeResource(staging_,resource.source);
             if(key.second==kGit||key.second==kAre)names.insert(key.first);
         }
         for(const auto& name:names)areas_->Append(wxui::toWx(name));
@@ -483,12 +482,7 @@ private:
         if(found!=resources_.end())fields_->activateResource(found->second.source.identity);
     }
     void stage(Resource& resource) {
-        const auto& original=resource.model->gff();
-        neogff::GffFile copy;copy.NewFile(original.filetype());copy.version(original.version());
-        copy.root()->typeid_=original.root()->typeid_;
-        for(const auto& field:original.root()->allFields())copy.root()->AddField(field->Clone());
-        const auto path=staging_/neoshared::pathFromUtf8(resource.source.fileName);
-        copy.SaveFile(path);resource.source.bytes=neomdl::readResourceFile(path);
+        resource.source.bytes=resource.model->gff().SaveBytes();
         if(!editableResource(resource.source.type))addedTemplates_[resourceKey(resource.source)]=resource.source;
     }
     bool dirty() const {
@@ -759,7 +753,7 @@ Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neom
     templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,source.bytes);identityKeys_[source.identity]=key;
     inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
     fields_->openResource(source);auto& resource=resources_.emplace(key,Resource{std::move(source),fields_->activeModel()}).first->second;
-    writeResource(staging_,resource.source);return resource;
+    return resource;
 }
 
 void ModuleEditor::editBlueprint() {
@@ -870,14 +864,10 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     for(auto& [key,resource]:resources_) {
         if(resource.source.bytes!=state.bytes.at(key)) {
             resource.source.bytes=state.bytes.at(key);
-            resource.model->gff().LoadBytes(resource.source.bytes);writeResource(staging_,resource.source);
+            resource.model->gff().LoadBytes(resource.source.bytes);
         }
     }
     refreshAreaControls();
-    for(const auto& [key,source]:state.templates) {
-        const auto previous=addedTemplates_.find(key);
-        if(!resources_.count(key)&&(previous==addedTemplates_.end()||previous->second.bytes!=source.bytes))writeResource(staging_,source);
-    }
     addedTemplates_=state.templates;importedTemplates_=state.imports;
     templateOrigins_=state.origins;
     inlineSources_=state.inlineSources;
@@ -1278,13 +1268,7 @@ std::string ModuleEditor::importTemplate(ResourceDocument source,const neomdl::R
         } while(sceneTemplate(name,key.second));
     }
     source.fileName=name+"."+neomdl::resourceExtension(source.type);
-    const auto path=staging_/neoshared::pathFromUtf8(source.fileName);
-    if(changed) {file.SaveFile(path);source.bytes=neomdl::readResourceFile(path);}
-    else {
-        std::ofstream output;output.exceptions(std::ios::failbit|std::ios::badbit);
-        output.open(path,std::ios::binary|std::ios::trunc);
-        output.write(reinterpret_cast<const char*>(source.bytes.data()),source.bytes.size());
-    }
+    if(changed)source.bytes=file.SaveBytes();
     source.identity="module-import:"+identity+"#"+name;
     inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
     addedTemplates_.emplace(Key{name,source.type},std::move(source));
@@ -1500,16 +1484,16 @@ bool ModuleEditor::saveResources() {
     wxDirDialog dialog(this,"Save module resources and imported templates to a working folder",{},wxDD_DEFAULT_STYLE);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
-    std::vector<std::filesystem::path> exports;
-    for(const auto& [key,resource]:resources_)if(editableResource(key.second))exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
-    for(const auto& [key,source]:addedTemplates_)exports.push_back(neoshared::pathFromUtf8(source.fileName));
-    for(const auto& file:exports) {
-        const auto destination=directory/file;
+    std::vector<const ResourceDocument*> exports;
+    for(const auto& [key,resource]:resources_)if(editableResource(key.second))exports.push_back(&resource.source);
+    for(const auto& [key,source]:addedTemplates_)exports.push_back(&source);
+    for(const auto* source:exports) {
+        const auto destination=directory/neoshared::pathFromUtf8(source->fileName);
         validateHostOutput(destination);neoshared::checkResourceOutput(destination,inputs_);
     }
-    const bool overwrite=std::any_of(exports.begin(),exports.end(),[&](const auto& file){return std::filesystem::exists(directory/file);});
+    const bool overwrite=std::any_of(exports.begin(),exports.end(),[&](const auto* source){return std::filesystem::exists(directory/neoshared::pathFromUtf8(source->fileName));});
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
-    for(const auto& file:exports)std::filesystem::copy_file(staging_/file,directory/file,std::filesystem::copy_options::overwrite_existing);
+    for(const auto* source:exports)writeResource(directory,*source);
     saved();setModuleStatusText("Saved module resources to "+neosettings::pathToWx(directory));return true;
 }
 
@@ -1524,9 +1508,13 @@ bool ModuleEditor::saveArchive() {
     neoshared::erf::ErfArchive archive(archivePath_);
     for(auto& [key,resource]:resources_) {
         if(!editableResource(key.second))continue;
+        writeResource(staging_,resource.source);
         archive.add_resource(staging_/neoshared::pathFromUtf8(resource.source.fileName),true);
     }
-    for(const auto& [key,source]:addedTemplates_)archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
+    for(const auto& [key,source]:addedTemplates_) {
+        writeResource(staging_,source);
+        archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
+    }
     archive.save(path);saved();setModuleStatusText("Saved module archive copy: "+neosettings::pathToWx(path));return true;
 }
 
