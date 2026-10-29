@@ -46,10 +46,11 @@ struct ObjectPlacementOptions {
 
 wxDECLARE_EVENT(EVT_OBJECT_PLACEMENT_MODE,wxCommandEvent);
 wxDECLARE_EVENT(EVT_TRIGGER_POLYGON_REQUESTED,wxCommandEvent);
+wxDECLARE_EVENT(EVT_BLUEPRINT_SELECTION_CHANGED,wxCommandEvent);
 
 class ObjectPalette final : public wxPanel {
 public:
-    explicit ObjectPalette(wxWindow* parent);
+    explicit ObjectPalette(wxWindow* parent,bool inventory=false);
     void setResources(std::shared_ptr<neomdl::GameResourceSession> session,
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,std::filesystem::path directory);
     void clear();
@@ -66,6 +67,7 @@ private:
     void rebuild();
     void filter();
     void placementModeChanged();
+    void selectionChanged();
     wxChoice* scope_{};wxChoice* kind_{};wxChoice* surface_{};
     wxListCtrl* entries_{};wxSearchCtrl* search_{};wxToggleButton* place_{};
     wxTextCtrl* heading_{};wxTextCtrl* height_{};wxTextCtrl* triggerSize_{};
@@ -77,6 +79,7 @@ private:
     std::vector<neomdl::ModuleScope> scopes_;
     std::vector<neomdl::GameResourceEntry> blueprints_;
     bool placementEnabled_{};
+    bool inventory_{};
 };
 
 }

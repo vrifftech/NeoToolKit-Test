@@ -3,6 +3,7 @@
 #include "AreaControls.hpp"
 #include "ModuleControls.hpp"
 #include "ModulePackage.hpp"
+#include "BlueprintEditor.hpp"
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
@@ -39,7 +40,7 @@ constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
-      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule};
+      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule,ID_EditBlueprint};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -90,6 +91,16 @@ void writeResource(const std::filesystem::path& directory,const ResourceDocument
     output.write(reinterpret_cast<const char*>(source.bytes.data()),source.bytes.size());
 }
 
+std::shared_ptr<neomdl::GameResourceSession> openModuleAssets(const neoshared::game::GameInstall& installation,const std::string& module,const neoshared::bif::JobControl& job={}) {
+    neomdl::GameResourceSession base;std::string error;
+    if(!base.open(installation,error,job))throw std::runtime_error(error);
+    const auto modules=base.modules();const auto found=std::find_if(modules.begin(),modules.end(),[&](const auto& candidate){return neomdl::resourceKey(candidate.name)==module;});
+    if(found==modules.end())throw std::runtime_error("The installation has no module scope named "+module+".");
+    auto session=std::make_shared<neomdl::GameResourceSession>();
+    if(!session->openModule(base,*found,error,job))throw std::runtime_error(error);
+    return session;
+}
+
 class ModuleEditor final : public ModuleEditorPanel {
 public:
     ModuleEditor(wxWindow* parent,neomodules::Context context)
@@ -132,7 +143,7 @@ public:
         objectBox->Add(apply_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
         auto* objectTools=new wxWrapSizer(wxHORIZONTAL);
         for(const auto& action:std::vector<std::pair<int,const char*>>{{ID_FrameObject,"Frame"},
-                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"}})
+                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"},{ID_EditBlueprint,"Edit blueprint..."}})
             objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
         objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
         objectSource_=new wxStaticText(objectPage,wxID_ANY,"Select an object to see where its properties load from.");
@@ -200,6 +211,7 @@ public:
         Bind(wxEVT_MENU,[this](wxCommandEvent& event){command(event);});
         Bind(wxEVT_BUTTON,[this](wxCommandEvent& event){command(event);});
         gameChoice_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
+            if(blueprintEditor_)blueprintEditor_->clear();
             game_=gameChoice_->GetSelection()==0?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
             install_.reset();session_.reset();
             palette_->clear();paletteSession_.reset();
@@ -416,6 +428,7 @@ private:
         objects->Append(ID_FrameArea,"Frame Area");objects->Append(ID_FrameObject,"Frame Selected Object");
         objects->Append(ID_DuplicateObject,"Duplicate Selected Object");objects->Append(ID_DeleteObject,"Delete Selected Object");
         objects->Append(ID_RedrawTrigger,"Redraw Selected Polygon Footprint");
+        objects->Append(ID_EditBlueprint,"Edit Selected Object Blueprint...");
         menus->Append(objects,"Objects");
         fieldMenus_=fields_->takeMenus();
         for(std::size_t i=0;i<fieldMenus_->GetMenuCount();) {
@@ -426,6 +439,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
+        if(blueprintEditor_)blueprintEditor_->clear();
         areaControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
         moduleControls_->load(nullptr,{});
         palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templateOrigins_.clear();inlineSources_.clear();templatesDirty_=false;
@@ -465,6 +479,7 @@ private:
         for(const auto& field:original.root()->allFields())copy.root()->AddField(field->Clone());
         const auto path=staging_/neoshared::pathFromUtf8(resource.source.fileName);
         copy.SaveFile(path);resource.source.bytes=neomdl::readResourceFile(path);
+        if(!editableResource(resource.source.type))addedTemplates_[resourceKey(resource.source)]=resource.source;
     }
     bool dirty() const {
         return templatesDirty_||std::any_of(resources_.begin(),resources_.end(),[](const auto& pair){return pair.second.model->dirty();});
@@ -532,6 +547,11 @@ private:
     bool saveResources();
     bool saveArchive();
     bool packageModule();
+    neomdl::ResourceResolver moduleResources() const;
+    Resource& openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver);
+    void editBlueprint();
+    void refreshBlueprintEditor();
+    bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.source.bytes;
         savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
@@ -551,6 +571,7 @@ private:
         enableModuleCommand(ID_ModuleRedo,redo);FindWindow(ID_ModuleRedo)->Enable(redo);
         editMenu_->SetLabel(ID_ModuleUndo,wxui::toWx(undo?"Undo "+history_[historyIndex_].action+"\tCtrl+Z":"Undo\tCtrl+Z"));
         editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
+        if(blueprintEditor_)blueprintEditor_->setHistory(undo,redo);
         gizmoTool_->Enable(editing&&loaded);
         objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
@@ -558,6 +579,14 @@ private:
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
+        bool blueprint=false;
+        if(selected) {
+            const auto& p=placements_[objects_->GetSelection()];const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+            const auto* use=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+            blueprint=use&&use->value&&std::any_of(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& kind){return p.list==kind.list&&kind.type!=2058&&kind.type!=2040;});
+        }
+        enableModuleCommand(ID_EditBlueprint,blueprint&&!busy);FindWindow(ID_EditBlueprint)->Enable(blueprint&&!busy);
+        FindWindow(ID_EditBlueprint)->SetToolTip("Edit the UTC/UTP/UTD/UTT/UTS/UTI/UTM used by this instance. Inline object properties remain in Fields.");
         enableModuleCommand(ID_RedrawTrigger,trigger);FindWindow(ID_RedrawTrigger)->Enable(trigger);
         for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport,ID_PackageModule}) {
             enableModuleCommand(id,loaded&&!busy);if(auto* control=FindWindow(id))control->Enable(loaded&&!busy);
@@ -599,6 +628,7 @@ private:
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
             case ID_PackageModule:packageModule();return;
+            case ID_EditBlueprint:editBlueprint();return;
             case ID_FrameArea:canvas_->frameModel();return;
             case ID_FrameObject:canvas_->framePosition(placements_.at(objects_->GetSelection()).position,5.0f);return;
             case ID_DuplicateObject:duplicateObject();return;
@@ -627,6 +657,7 @@ private:
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     AreaControls* areaControls_{};std::string controlsArea_;
     ModuleControls* moduleControls_{};
+    BlueprintEditor* blueprintEditor_{};Key blueprintKey_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
     bool drawingNewTrigger_{};
@@ -661,6 +692,70 @@ private:
     double scale_{1.0};wxTimer timer_;
     Clock::time_point due_,lastFrame_{Clock::now()};
 };
+
+neomdl::ResourceResolver ModuleEditor::moduleResources() const {
+    std::map<Key,ResourceDocument> edits;
+    for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
+    for(const auto& [key,source]:addedTemplates_)edits.insert_or_assign(key,source);
+    const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
+    return [edits=std::move(edits),catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+        const Key key{neomdl::resourceKey(name),type};if(const auto found=edits.find(key);found!=edits.end())return found->second;
+        for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==key.first)return readArchiveResource(*catalog,entry);
+        if(local)if(auto source=local(name,type))return source;
+        return game(name,type);
+    };
+}
+
+Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver) {
+    const auto key=resourceKey(source);auto found=resources_.find(key);
+    if(found!=resources_.end()) {fields_->activateResource(found->second.source.identity);return found->second;}
+    for(auto& state:history_) {state.bytes.emplace(key,source.bytes);state.origins.emplace(key,resolver);}
+    templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,source.bytes);identityKeys_[source.identity]=key;
+    inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
+    fields_->openResource(source);auto& resource=resources_.emplace(key,Resource{std::move(source),fields_->activeModel()}).first->second;
+    writeResource(staging_,resource.source);return resource;
+}
+
+void ModuleEditor::editBlueprint() {
+    const auto& p=placements_.at(objects_->GetSelection());
+    const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& k){return p.list==k.list;});
+    const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+    const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    const auto name=neomdl::resourceKey(record.GetFieldByLabel(kind.reference)->GetString());auto resolver=moduleResources();
+    auto& resource=openBlueprintResource(resolver(name,kind.type).value(),resolver);blueprintKey_=resourceKey(resource.source);
+    if(!blueprintEditor_) {
+        BlueprintEditor::Actions actions;
+        actions.edit=[this](const std::string& path,const std::string&,const std::string& value,const std::string& label){
+            rememberSelection();auto& resource=resources_.at(blueprintKey_);
+            resource.model->setValue(path,value);stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);
+            recordEdit("Edit blueprint "+label);requestPreview();
+        };
+        actions.addItem=[this](ResourceDocument item,const neomdl::ResourceResolver& resolver){
+            rememberSelection();const auto name=importTemplate(std::move(item),resolver);auto& resource=resources_.at(blueprintKey_);auto& root=*resource.model->gff().root();
+            if(!root.GetFieldByLabel("ItemList"))root.AddField(std::make_unique<neogff::GffList>("ItemList"));
+            auto& list=static_cast<neogff::GffList&>(*root.GetFieldByLabel("ItemList"));auto entry=std::make_unique<neogff::GffStruct>();entry->typeid_=0;
+            entry->AddField(std::make_unique<neogff::GffResRefField>("InventoryRes",name));entry->AddField(std::make_unique<neogff::GffByteField>("Infinite",0));
+            list.AddStruct(std::move(entry));resource.model->gff().dirty(true);stage(resource);fields_->refreshActiveDocument();recordEdit("Add shop item");blueprintEditor_->selectInventory(list.count()-1);requestPreview();
+        };
+        actions.stock=[this](BlueprintEditor::StockAction action,std::size_t index,bool enabled){
+            rememberSelection();auto& resource=resources_.at(blueprintKey_);auto& list=static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel("ItemList"));
+            if(action==BlueprintEditor::StockAction::Remove)list.allStructs().erase(list.allStructs().begin()+index);
+            else if(action==BlueprintEditor::StockAction::Duplicate) {auto copy=list.GetStruct(index)->Clone();list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));}
+            else {auto& item=*list.GetStruct(index);const auto* flag=static_cast<const neogff::GffByteField*>(item.GetFieldByLabel("Infinite"));const auto value=(flag?flag->value:0u)&~1u;setField(item,std::make_unique<neogff::GffByteField>("Infinite",std::uint8_t(value|(enabled?1u:0u))));}
+            resource.model->gff().dirty(true);stage(resource);fields_->refreshActiveDocument();recordEdit("Edit shop stock");requestPreview();
+        };
+        actions.itemFields=[this](const std::string& name,std::uint16_t type){auto resolver=moduleResources();openBlueprintResource(resolver(name,type).value(),resolver);blueprintEditor_->Hide();fields_->SetFocus();};
+        actions.fields=[this]{fields_->activateResource(resources_.at(blueprintKey_).source.identity);fields_->refreshActiveDocument();fields_->SetFocus();};
+        actions.save=[this]{saveResources();};actions.package=[this]{packageModule();};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
+        blueprintEditor_=new BlueprintEditor(this,std::move(actions));
+    }
+    blueprintEditor_->open(kind.type,resource.source.fileName,*resource.model->gff().root(),moduleResources(),session_,catalog_,localDirectory_);
+    wxui::applyTheme(blueprintEditor_,dark_);rememberSelection();updateActions();
+}
+
+void ModuleEditor::refreshBlueprintEditor() {
+    if(blueprintEditor_&&blueprintEditor_->IsShown())blueprintEditor_->refresh(*resources_.at(blueprintKey_).model->gff().root(),moduleResources());
+}
 
 EditState ModuleEditor::captureEdit(const std::string& action) const {
     EditState state;
@@ -710,6 +805,7 @@ void ModuleEditor::recordEdit(const std::string& action) {
     history_.erase(history_.begin()+historyIndex_+1,history_.end());
     history_.push_back(std::move(state));++historyIndex_;
     updateDirty();updateActions();
+    refreshBlueprintEditor();
 }
 
 void ModuleEditor::restoreEdit(std::size_t index) {
@@ -733,6 +829,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     const auto selected=objects_->GetSelection();
     if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
     selecting_=false;requestPreview();
+    refreshBlueprintEditor();
     setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
 }
 
@@ -1239,8 +1336,10 @@ void ModuleEditor::chooseAssets() {
     const auto id=game->GetSelection()==0?neoshared::game::GameId::Kotor1:neoshared::game::GameId::Kotor2;
     auto installation=neoshared::game::inspectGameInstallation(neosettings::pathFromWx(directory->GetValue()),id);
     if(!installation)throw std::runtime_error("Choose a K1 or K2 installation containing chitin.key and its game data.");
+    if(blueprintEditor_)blueprintEditor_->clear();
     install_=std::move(installation);session_.reset();moduleName_=neomdl::resourceKey(wxui::toStd(scope->GetValue()));
     palette_->clear();paletteSession_.reset();
+    session_=openModuleAssets(*install_,moduleName_);palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
     game_=id==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
     gameChoice_->SetSelection(game->GetSelection());
     refreshAreaControls();
@@ -1251,7 +1350,7 @@ void ModuleEditor::chooseAssets() {
 
 void ModuleEditor::startPreview() {
     std::map<Key,ResourceDocument> edits;
-    for(const auto& [key,resource]:resources_)edits.emplace(key,resource.source);
+    for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.emplace(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
     auto pending=canvas_->prepareAreaLoad();
@@ -1263,13 +1362,7 @@ void ModuleEditor::startPreview() {
         neoshared::bif::JobControl job;job.cancelled=[cancel]{return cancel->load();};
         neomdl::ResourceLoadScope work(job);
         if(!session&&installation) {
-            neomdl::GameResourceSession base;std::string error;
-            if(!base.open(*installation,error,job))throw std::runtime_error(error);
-            const auto modules=base.modules();
-            const auto found=std::find_if(modules.begin(),modules.end(),[&](const auto& candidate){return neomdl::resourceKey(candidate.name)==module;});
-            if(found==modules.end())throw std::runtime_error("The installation has no module scope named "+module+".");
-            session=std::make_shared<neomdl::GameResourceSession>();
-            if(!session->openModule(base,*found,error,job))throw std::runtime_error(error);
+            session=openModuleAssets(*installation,module,job);
         }
         auto resolver=[edits=std::move(edits),catalog,host,local,session](const std::string& name,std::uint16_t type)
                 ->std::optional<ResourceDocument> {
@@ -1341,7 +1434,7 @@ bool ModuleEditor::saveResources() {
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
     std::vector<std::filesystem::path> exports;
-    for(const auto& [key,resource]:resources_)exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
+    for(const auto& [key,resource]:resources_)if(exportsResource(key))exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
     for(const auto& [key,source]:addedTemplates_)exports.push_back(neoshared::pathFromUtf8(source.fileName));
     for(const auto& file:exports) {
         const auto destination=directory/file;
@@ -1366,6 +1459,7 @@ bool ModuleEditor::saveArchive() {
     neoshared::erf::ErfArchive archive(archivePath_);
     for(auto& [key,resource]:resources_)if(resource.model->dirty())stage(resource);
     for(auto& [key,resource]:resources_) {
+        if(!exportsResource(key))continue;
         archive.add_resource(staging_/neoshared::pathFromUtf8(resource.source.fileName),true);
     }
     for(const auto& [key,source]:addedTemplates_)archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
@@ -1393,7 +1487,7 @@ bool ModuleEditor::packageModule() {
         return game(name,type);
     };
     std::vector<ModulePackageInput> edits;
-    for(auto& [key,resource]:resources_) {if(resource.model->dirty())stage(resource);edits.push_back({resource.source,resolve});}
+    for(auto& [key,resource]:resources_)if(exportsResource(key)) {if(resource.model->dirty())stage(resource);edits.push_back({resource.source,resolve});}
     for(const auto& [key,source]:addedTemplates_)edits.push_back({source,templateOrigins_.at(key)});
     std::vector<ModulePackageInput> inlineSources;for(const auto& [identity,source]:inlineSources_)inlineSources.push_back(source);
     ModulePackage package;
