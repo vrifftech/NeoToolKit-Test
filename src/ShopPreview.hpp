@@ -24,14 +24,16 @@ public:
     bool loaded() const {return bool(textures_);}
     std::string sources() const;
 private:
-    struct Font {double height{},width{},spacing{};std::vector<wxPoint2DDouble> upper,lower;};
+    struct Font {double height{},width{},spacing{},lineSpacing{};std::vector<wxPoint2DDouble> upper,lower;};
     struct Item {std::size_t source{};std::string name,description,icon;unsigned stack{};int group{};bool infinite{},plot{};};
     const neoshared::texture::TextureData& texture(const std::string& name);
     Font& font(const std::string& name);
     void cacheControl(const neogff::GffStruct& control);
     void stamp(wxGraphicsContext& dc,const std::string& name,const wxRect2DDouble& rect,const neomdl::model::Vec3& color,double alpha=1,int turn=0,bool flipX=false,bool flipY=false);
+    wxRect2DDouble borderInner(const neogff::GffStruct& record,const std::string& field,wxRect2DDouble rect);
     wxRect2DDouble border(wxGraphicsContext& dc,const neogff::GffStruct& record,const std::string& field,wxRect2DDouble rect,std::optional<neomdl::model::Vec3> tint={});
-    void text(wxGraphicsContext& dc,const neogff::GffStruct& style,const std::string& value,wxRect2DDouble rect,double scale=1.3);
+    void scrollbar(wxGraphicsContext& dc,const neogff::GffStruct& style,wxRect2DDouble rect,int count,int top,int visible);
+    void text(wxGraphicsContext& dc,const neogff::GffStruct& style,const std::string& value,wxRect2DDouble rect,double scale,std::optional<neomdl::model::Vec3> tint={});
     void paint(wxPaintEvent& event);
     std::unique_ptr<neomdl::ModelDocument> textures_;
     neomdl::ResourceResolver resolver_;
@@ -45,7 +47,7 @@ private:
     neomdl::model::GameVersion game_{};
     std::function<void(std::size_t)> selected_;
     int selection_{-1},firstRow_{};
-    double scale_{1},offsetX_{},offsetY_{};
+    double scale_{1},offsetX_{},offsetY_{},fontScale_{1};
 };
 
 }

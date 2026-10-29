@@ -28,7 +28,7 @@ public:
         std::function<void()> fields,save,package,undo,redo;
     };
     BlueprintEditor(wxWindow* parent,Actions actions);
-    void open(std::uint16_t type,const std::string& title,const neogff::GffStruct& root,
+    void open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
         neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
     void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver);
@@ -38,13 +38,14 @@ public:
 private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
     struct Row {std::string field,type,label;Kind kind;wxWindow* control;};
-    void buildProperties(std::uint16_t type);
+    void buildProperties(std::uint16_t type,bool k2);
     void commit(std::size_t index);
     void selectStock(int index);
     void addItem();
     void loadPreview();
     Actions actions_;
     std::uint16_t type_{};
+    neomdl::model::GameVersion game_{};
     const neogff::GffStruct* root_{};
     std::vector<Row> rows_;
     neomdl::ResourceResolver resolver_;

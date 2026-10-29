@@ -55,7 +55,7 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){Hide();event.Veto();});
 }
 
-void BlueprintEditor::buildProperties(std::uint16_t type) {
+void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
     for(auto& r:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(r.control))text->DiscardEdits();
     rows_.clear();properties_->DestroyChildren();
     auto* box=new wxBoxSizer(wxVERTICAL);properties_->SetSizer(box);
@@ -92,7 +92,8 @@ void BlueprintEditor::buildProperties(std::uint16_t type) {
     if(type==2027||type==2042||type==2044)add("Conversation","ResRef","Conversation");
     std::vector<std::string> scripts;
     if(type==2027)scripts={"ScriptHeartbeat","ScriptOnNotice","ScriptSpellAt","ScriptAttacked","ScriptDamaged","ScriptDisturbed","ScriptEndRound","ScriptDialogue","ScriptSpawn","ScriptRested","ScriptDeath","ScriptUserDefine","ScriptOnBlocked","ScriptEndDialogue"};
-    if(type==2042||type==2044)scripts={"OnClosed","OnDamaged","OnDeath","OnDisarm","OnHeartbeat","OnLock","OnMeleeAttacked","OnOpen","OnSpellCastAt","OnUnlock","OnUserDefined","OnDialog","OnFailToOpen","OnTrapTriggered"};
+    if(type==2042||type==2044)scripts={"OnClosed","OnDamaged","OnDeath","OnDisarm","OnHeartbeat","OnLock","OnMeleeAttacked","OnOpen","OnSpellCastAt","OnUnlock","OnUserDefined","OnDialog","OnTrapTriggered"};
+    if(type==2042||(type==2044&&k2))scripts.push_back("OnFailToOpen");
     if(type==2042)scripts.push_back("OnClick");
     if(type==2044) {scripts.push_back("OnInvDisturbed");scripts.push_back("OnUsed");scripts.push_back("OnEndDialogue");}
     if(type==2032)scripts={"ScriptHeartbeat","ScriptOnEnter","ScriptOnExit","ScriptUserDefine","OnTrapTriggered","OnDisarm","OnClick"};
@@ -100,14 +101,14 @@ void BlueprintEditor::buildProperties(std::uint16_t type) {
     for(const auto& name:scripts)add(name,"ResRef",name);
     auto* note=new wxStaticText(properties_,wxID_ANY,"Only fields present in the template are enabled. Other fields and translations are available through All fields. For placeables, Open and saved Animation take precedence over AnimationState.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);properties_->FitInside();
 }
-void BlueprintEditor::open(std::uint16_t type,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
-    if(type_!=type) {buildProperties(type);preview_->clear();type_=type;}
+void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
+    if(type_!=type||game_!=game) {buildProperties(type,game==neomdl::model::GameVersion::Kotor2);preview_->clear();type_=type;game_=game;}
     session_=std::move(session);catalog_=std::move(catalog);directory_=directory;SetTitle(wxui::toWx(title));source_->SetLabel(wxui::toWx(title+" — module override; affects instances using this template. Save resources or Package MOD includes edits."));
     const bool store=type==2051;stockPage_->Enable(store);previewPage_->Enable(store);
     if(!store&&split_->IsSplit())split_->Unsplit(previewPage_);
     if(store&&!split_->IsSplit()) {previewPage_->Show();split_->SplitVertically(split_->GetWindow1(),previewPage_,FromDIP(360));}
     layout_->Clear();if(session_)for(const auto& entry:session_->resources({2047}))layout_->Append(wxui::toWx(entry.resref));
-    const bool k1=session_&&neoshared::game::gameIdFromString(session_->installation()->id).value()==neoshared::game::GameId::Kotor1;
+    const bool k1=game==neomdl::model::GameVersion::Kotor1;
     layout_->ChangeValue(k1?"store":"store_p");add_->Enable(bool(session_));loadPreview_->Enable(store&&bool(session_));
     refresh(root,std::move(resolver));Layout();Show();Raise();
 }
@@ -158,7 +159,7 @@ void BlueprintEditor::loadPreview() {
         const auto& install=*session_->installation();const auto path=neoshared::game::findExistingPathCaseInsensitive(install.installPath/"dialog.tlk");
         const auto game=neoshared::game::gameIdFromString(install.id).value()==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
         preview_->load(wxui::toStd(layout_->GetValue()),resolver_,path,game);preview_->setStore(*root_,resolver_,int(stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED)));
-        previewStatus_->SetLabel("Game GUI, textures and font atlas: static shop stock / buy-page layout. Scroll or click a row. Player pricing, selling from player inventory, scripts and runtime item merging are not simulated.");previewStatus_->Wrap(FromDIP(580));
+        previewStatus_->SetLabel("Game GUI, textures and font atlas: static shop stock / buy-page layout. Scroll or click a row. Descriptions show template text; generated property details, player pricing/inventory, scripts and runtime item merging are not simulated.");previewStatus_->Wrap(FromDIP(580));
     } catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));wxui::showError(this,e);}
 }
 void BlueprintEditor::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();Hide();}

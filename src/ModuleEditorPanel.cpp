@@ -749,7 +749,7 @@ void ModuleEditor::editBlueprint() {
         actions.save=[this]{saveResources();};actions.package=[this]{packageModule();};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
         blueprintEditor_=new BlueprintEditor(this,std::move(actions));
     }
-    blueprintEditor_->open(kind.type,resource.source.fileName,*resource.model->gff().root(),moduleResources(),session_,catalog_,localDirectory_);
+    blueprintEditor_->open(kind.type,game_,resource.source.fileName,*resource.model->gff().root(),moduleResources(),session_,catalog_,localDirectory_);
     wxui::applyTheme(blueprintEditor_,dark_);rememberSelection();updateActions();
 }
 
