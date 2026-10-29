@@ -1,4 +1,5 @@
 #include "ModuleEditorPanel.hpp"
+#include "ObjectPalette.hpp"
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
@@ -10,6 +11,7 @@
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/listbox.h>
+#include <wx/notebook.h>
 #include <wx/splitter.h>
 #include <wx/timer.h>
 #include <wx/wrapsizer.h>
@@ -32,7 +34,7 @@ using Key=std::pair<std::string,std::uint16_t>;
 constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
-      ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport};
+      ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -45,6 +47,14 @@ Fields fieldsOf(const neogff::GffStruct& record) {
 }
 float scalar(const Fields& fields,const std::string& name) {
     return dynamic_cast<const neogff::GffFloatField&>(*fields.at(name)).value;
+}
+void setField(neogff::GffStruct& record,std::unique_ptr<neogff::GffField> value) {
+    auto& fields=record.allFields();
+    const auto found=std::find_if(fields.begin(),fields.end(),[&](const auto& field){return field->GetLabel()==value->GetLabel();});
+    if(found==fields.end())record.AddField(std::move(value));else *found=std::move(value);
+}
+void mergeFields(neogff::GffStruct& destination,const neogff::GffStruct& source) {
+    for(const auto& field:source.allFields())if(!destination.GetFieldByLabel(field->GetLabel()))destination.AddField(field->Clone());
 }
 
 struct Resource {
@@ -72,6 +82,7 @@ public:
         auto* tools=new wxWrapSizer(wxHORIZONTAL);
         const std::pair<int,const char*> actions[]={{ID_OpenModule,"Open module..."},
             {ID_ModuleAssets,"Game resources..."},{ID_RefreshArea,"Refresh 3D"},
+            {ID_AddObject,"Add object..."},
             {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_SceneReport,"Scene report..."}};
         for(const auto& action:actions)tools->Add(new wxButton(this,action.first,action.second),0,wxALL,3);
         root->Add(tools,0,wxEXPAND|wxALL,4);
@@ -87,27 +98,32 @@ public:
         sidebar->Add(new wxStaticText(inspector,wxID_ANY,"Area"),0,wxALL,6);
         areas_=new wxChoice(inspector,wxID_ANY);
         sidebar->Add(areas_,0,wxEXPAND|wxLEFT|wxRIGHT,6);
-        sidebar->Add(new wxStaticText(inspector,wxID_ANY,"GIT objects / module entry"),0,wxALL,6);
-        objects_=new wxListBox(inspector,wxID_ANY);
-        sidebar->Add(objects_,1,wxEXPAND|wxLEFT|wxRIGHT,6);
+        objectTabs_=new wxNotebook(inspector,wxID_ANY);
+        auto* objectPage=new wxPanel(objectTabs_);auto* objectBox=new wxBoxSizer(wxVERTICAL);
+        objectBox->Add(new wxStaticText(objectPage,wxID_ANY,"GIT objects / module entry"),0,wxALL,6);
+        objects_=new wxListBox(objectPage,wxID_ANY);
+        objectBox->Add(objects_,1,wxEXPAND|wxLEFT|wxRIGHT,6);
         auto* fields=new wxFlexGridSizer(2,4,6);fields->AddGrowableCol(1);
         const char* names[]={"X","Y","Z","Heading (degrees)"};
         for(std::size_t i=0;i<4;++i) {
-            fields->Add(new wxStaticText(inspector,wxID_ANY,names[i]),0,wxALIGN_CENTER_VERTICAL);
-            transform_[i]=new wxTextCtrl(inspector,wxID_ANY);
+            fields->Add(new wxStaticText(objectPage,wxID_ANY,names[i]),0,wxALIGN_CENTER_VERTICAL);
+            transform_[i]=new wxTextCtrl(objectPage,wxID_ANY);
             fields->Add(transform_[i],1,wxEXPAND);
         }
-        sidebar->Add(fields,0,wxEXPAND|wxALL,6);
-        apply_=new wxButton(inspector,wxID_ANY,"Apply transform");
-        sidebar->Add(apply_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
+        objectBox->Add(fields,0,wxEXPAND|wxALL,6);
+        apply_=new wxButton(objectPage,wxID_ANY,"Apply transform");
+        objectBox->Add(apply_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
         auto* objectTools=new wxWrapSizer(wxHORIZONTAL);
         for(const auto& action:std::vector<std::pair<int,const char*>>{{ID_FrameObject,"Frame"},
                 {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"}})
-            objectTools->Add(new wxButton(inspector,action.first,action.second),0,wxALL,3);
-        sidebar->Add(objectTools,0,wxEXPAND|wxALL,3);
+            objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
+        objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
+        palette_=new ObjectPalette(objectTabs_);objectTabs_->AddPage(objectPage,"Objects");objectTabs_->AddPage(palette_,"Add objects");
+        sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
         canvas_=new neomdl::ui::ModelCanvas(split_);
+        palette_->installDropTarget(canvas_,[this](wxPoint point){return dropObject(point);},[this]{return canPlaceObject();});
         createFields();
         split_->SetMinimumPaneSize(FromDIP(260));split_->SetSashGravity(0.55);
         split_->SplitVertically(canvas_,fields_,FromDIP(520));
@@ -124,6 +140,7 @@ public:
         gameChoice_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
             game_=gameChoice_->GetSelection()==0?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
             install_.reset();session_.reset();
+            palette_->clear();paletteSession_.reset();
             auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
             canvas_->setDocument(document.get());document_=std::move(document);
             pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;requestPreview();
@@ -133,6 +150,10 @@ public:
             canvas_->clearArea();rebuildObjects();activateAreaResource();requestPreview();
         });
         objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);});
+        objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
+            if(event.GetSelection()==0)palette_->stopPlacing();
+            event.Skip();
+        });
         apply_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
             try {applyTransform();} catch(const std::exception& e) {wxui::showError(this,e);}
         });
@@ -140,6 +161,17 @@ public:
             const auto found=ownerPaths_.find(wxui::toStd(event.GetString()));
             if(found==ownerPaths_.end())selectObject(wxNOT_FOUND,false);
             else selectObject(findPlacement(found->second),true);
+        });
+        palette_->Bind(EVT_OBJECT_PLACEMENT_MODE,[this](wxCommandEvent&){updatePlacementCursor();});
+        canvas_->Bind(wxEVT_LEFT_DOWN,[this](wxMouseEvent& event){
+            if(palette_->placing()) {canvas_->SetFocus();dropObject(event.GetPosition());}
+            else event.Skip();
+        });
+        canvas_->Bind(wxEVT_RIGHT_DOWN,[this](wxMouseEvent& event){
+            if(palette_->placing())palette_->stopPlacing();else event.Skip();
+        });
+        canvas_->Bind(wxEVT_CHAR_HOOK,[this](wxKeyEvent& event){
+            if(event.GetKeyCode()==WXK_ESCAPE&&palette_->placing())palette_->stopPlacing();else event.Skip();
         });
         Bind(wxEVT_TIMER,[this](wxTimerEvent&){tick();});timer_.Start(33);
         updateActions();
@@ -161,7 +193,7 @@ public:
             loading_.wait();loading_=std::future<Preview>{};canvas_->setLoading(false);
         }
         if(!dirty())return true;
-        const auto answer=wxMessageBox("Save the edited GIT, ARE and IFO resources before closing?",
+        const auto answer=wxMessageBox("Save the edited module resources before closing?",
             "Unsaved module edits",wxYES_NO|wxCANCEL|wxICON_QUESTION,this);
         if(answer==wxCANCEL)return false;
         if(answer==wxNO)return true;
@@ -279,6 +311,7 @@ private:
         file->Append(ID_SaveModule,"Save Archive Copy...\tCtrl+Shift+S");
         menus->Append(file,"Module");
         auto* objects=new wxMenu;
+        objects->Append(ID_AddObject,"Add Object from Game Files...");
         objects->Append(ID_FrameArea,"Frame Area");objects->Append(ID_FrameObject,"Frame Selected Object");
         objects->Append(ID_DuplicateObject,"Duplicate Selected Object");objects->Append(ID_DeleteObject,"Delete Selected Object");
         menus->Append(objects,"Objects");
@@ -291,6 +324,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
+        palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templatesDirty_=false;
         selecting_=true;fields_->clearDocuments();
         resources_=std::move(resources);identityKeys_.clear();inputs_.clear();
         areas_->Clear();std::set<std::string> names;
@@ -327,7 +361,7 @@ private:
         copy.SaveFile(path);resource.source.bytes=neomdl::readResourceFile(path);
     }
     bool dirty() const {
-        return std::any_of(resources_.begin(),resources_.end(),[](const auto& pair){return pair.second.model->dirty();});
+        return templatesDirty_||std::any_of(resources_.begin(),resources_.end(),[](const auto& pair){return pair.second.model->dirty();});
     }
     void rebuildObjects();
     void selectObject(int index,bool selectField);
@@ -339,6 +373,12 @@ private:
     void duplicateObject();
     void deleteObject();
     void chooseAssets();
+    bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&resources_.count({areaName(),kGit})!=0;}
+    void updatePlacementCursor() {canvas_->SetCursor(wxCursor(palette_->placing()&&canPlaceObject()?wxCURSOR_CROSS:wxCURSOR_ARROW));}
+    bool dropObject(wxPoint point);
+    std::string importTemplate(neoshared::ResourceDocument source,const neomdl::ResourceResolver& resolver);
+    std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
+    bool expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates);
     void requestPreview() {
         ++revision_;cancel_->store(true);
         if(previewEnabled_) {requested_=true;due_=Clock::now()+std::chrono::milliseconds(200);}
@@ -350,11 +390,14 @@ private:
     bool saveResources();
     bool saveArchive();
     void saved() {
+        templatesDirty_=false;
         for(auto& [key,resource]:resources_)resource.model->gff().dirty(false);
         fields_->refreshActiveDocument();updateActions();
     }
     void updateActions() {
         const bool loaded=!resources_.empty(),selected=objects_->GetSelection()!=wxNOT_FOUND;
+        palette_->setPlacementEnabled(canPlaceObject());updatePlacementCursor();
+        enableModuleCommand(ID_AddObject,loaded);FindWindow(ID_AddObject)->Enable(loaded);
         gameChoice_->Enable(loaded);
         const bool editing=!requested_&&!loading_.valid();
         for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport}) {
@@ -380,6 +423,7 @@ private:
                 return;
             }
             case ID_ModuleAssets:chooseAssets();return;
+            case ID_AddObject:objectTabs_->SetSelection(1);return;
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
@@ -408,8 +452,12 @@ private:
     neomdl::ui::ModelCanvas* canvas_{};
     wxStaticText* sourceLabel_{};wxChoice* areas_{};wxChoice* gameChoice_{};wxListBox* objects_{};
     wxTextCtrl* transform_[4]{};wxButton* apply_{};
+    wxNotebook* objectTabs_{};ObjectPalette* palette_{};
     std::unique_ptr<wxMenuBar> fieldMenus_;
     std::map<Key,Resource> resources_;
+    std::map<Key,ResourceDocument> addedTemplates_;
+    std::map<std::string,std::string> importedTemplates_;
+    bool templatesDirty_{};
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path archivePath_,localDirectory_,staging_;
@@ -423,6 +471,7 @@ private:
     neomdl::model::GameVersion game_{neomdl::model::GameVersion::Kotor2};
     std::optional<neoshared::game::GameInstall> install_;
     std::shared_ptr<neomdl::GameResourceSession> session_;
+    std::shared_ptr<neomdl::GameResourceSession> paletteSession_;
     std::future<Preview> loading_;
     std::shared_ptr<std::atomic<bool>> cancel_{std::make_shared<std::atomic<bool>>(false)};
     std::size_t revision_{},loadingRevision_{};
@@ -565,6 +614,122 @@ void ModuleEditor::deleteObject() {
     stage(resource);fields_->refreshActiveDocument();rebuildObjects();requestPreview();
 }
 
+std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& name,std::uint16_t type) const {
+    if(const auto found=addedTemplates_.find({name,type});found!=addedTemplates_.end())return found->second;
+    for(const auto& entry:catalog_->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==name)
+        return readArchiveResource(*catalog_,entry);
+    if(!localDirectory_.empty())if(auto source=neomdl::directoryResources(localDirectory_)(name,type))return source;
+    return session_->resolve(name,type);
+}
+
+bool ModuleEditor::expandItems(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool templates) {
+    bool changed=false;
+    for(const auto& [label,reference]:std::array<std::pair<const char*,const char*>,2>{{
+            {"Equip_ItemList","EquippedRes"},{"ItemList","InventoryRes"}}}) {
+        if(auto* list=dynamic_cast<neogff::GffList*>(record.GetFieldByLabel(label)))for(const auto& item:list->allStructs()) {
+            const auto* field=item->GetFieldByLabel(reference);
+            if(!field)continue;
+            const auto name=neomdl::resourceKey(field->GetString());
+            auto source=resolver(name,2025).value();
+            if(templates) {
+                const auto imported=importTemplate(std::move(source),resolver);
+                if(imported!=name) {setField(*item,std::make_unique<neogff::GffResRefField>(reference,imported));changed=true;}
+            } else {
+                neogff::GffFile file;file.LoadBytes(source.bytes);mergeFields(*item,*file.root());
+            }
+        }
+    }
+    return changed;
+}
+
+std::string ModuleEditor::importTemplate(ResourceDocument source,const neomdl::ResourceResolver& resolver) {
+    const auto identity=source.identity;
+    if(const auto found=importedTemplates_.find(identity);found!=importedTemplates_.end())return found->second;
+    const auto key=resourceKey(source);
+    neogff::GffFile file;file.LoadBytes(source.bytes);
+    const auto changed=expandItems(*file.root(),resolver,true);
+    const auto existing=sceneTemplate(key.first,key.second);
+    if(!changed&&existing&&existing->bytes==source.bytes) {
+        importedTemplates_[identity]=key.first;return key.first;
+    }
+    std::string name=key.first;
+    if(existing) {
+        std::size_t counter=1;
+        do {
+            const auto suffix="_neo"+std::to_string(counter++);
+            name=key.first.substr(0,16-suffix.size())+suffix;
+        } while(sceneTemplate(name,key.second));
+    }
+    source.fileName=name+"."+neomdl::resourceExtension(source.type);
+    const auto path=staging_/neoshared::pathFromUtf8(source.fileName);
+    if(changed) {file.SaveFile(path);source.bytes=neomdl::readResourceFile(path);}
+    else {
+        std::ofstream output;output.exceptions(std::ios::failbit|std::ios::badbit);
+        output.open(path,std::ios::binary|std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(source.bytes.data()),source.bytes.size());
+    }
+    source.identity="module-import:"+identity+"#"+name;
+    inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
+    addedTemplates_.emplace(Key{name,source.type},std::move(source));
+    importedTemplates_[identity]=name;templatesDirty_=true;return name;
+}
+
+bool ModuleEditor::dropObject(wxPoint point) {
+    if(!canPlaceObject())return false;
+    try {
+        const auto options=palette_->placementOptions();
+        auto position=canvas_->areaPlacementPoint(point,options.planeZ);
+        if(!position) {
+            setModuleStatusText("No placement intersection. Choose a surface, or set a height plane.");return false;
+        }
+        position->z+=options.zOffset;
+        const auto blueprint=palette_->selectedBlueprint();
+        const auto resolver=palette_->selectedResources();
+        const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return value.type==blueprint.type;});
+        auto& resource=resources_.at({areaName(),kGit});
+        auto& root=*resource.model->gff().root();
+        const auto* flag=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+        const bool templates=flag&&flag->value!=0;
+        neogff::GffFile file;file.LoadBytes(blueprint.bytes);
+        auto instance=std::make_unique<neogff::GffStruct>();
+        if(!templates||kind.type==2058) {
+            auto copy=file.root()->Clone();instance.reset(static_cast<neogff::GffStruct*>(copy.release()));
+        } else for(const auto* name:{"Tag","LinkedTo","LinkedToModule","LinkedToFlags","TransitionDestin",
+                "OpenState","AnimationState","UseTweakColor","TweakColor"})
+            if(const auto* field=file.root()->GetFieldByLabel(name))instance->AddField(field->Clone());
+        instance->typeid_=kind.structure;
+        const auto reference=templates?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
+        if(!templates)expandItems(*instance,resolver,false);
+        setField(*instance,std::make_unique<neogff::GffResRefField>("TemplateResRef",reference));
+        const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
+        number(kind.shortCoordinates?"X":"XPosition",position->x);
+        number(kind.shortCoordinates?"Y":"YPosition",position->y);
+        number(kind.shortCoordinates?"Z":"ZPosition",position->z);
+        const auto angle=options.heading/kDegrees;
+        if(kind.bearing)number("Bearing",angle);
+        else if(kind.type!=2035) {number("XOrientation",-std::sin(angle));number("YOrientation",std::cos(angle));number("ZOrientation",0.0f);}
+        if(kind.type==2035)setField(*instance,std::make_unique<neogff::GffUInt32Field>("GeneratedType",0));
+        if(kind.type==2032) {
+            auto geometry=std::make_unique<neogff::GffList>("Geometry");
+            const auto half=options.triggerSize*0.5f;
+            for(const auto& point:std::array<std::array<float,2>,4>{{{{-half,-half}},{{half,-half}},{{half,half}},{{-half,half}}}}) {
+                auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",point[0]*std::cos(angle)-point[1]*std::sin(angle)));
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",point[0]*std::sin(angle)+point[1]*std::cos(angle)));
+                vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",0.0f));geometry->AddStruct(std::move(vertex));
+            }
+            setField(*instance,std::move(geometry));
+        }
+        if(!root.GetFieldByLabel(kind.list))root.AddField(std::make_unique<neogff::GffList>(kind.list));
+        auto& list=dynamic_cast<neogff::GffList&>(*root.GetFieldByLabel(kind.list));
+        selectedPath_=std::string(kind.list)+"\\"+std::to_string(list.count());
+        list.AddStruct(std::move(instance));resource.model->gff().dirty(true);
+        stage(resource);rebuildObjects();selectObject(findPlacement(selectedPath_),true);requestPreview();
+        setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position->x)+", "+decimal(position->y)+", "+decimal(position->z)));
+        return true;
+    } catch(const std::exception& e) {wxui::showError(this,e);return false;}
+}
+
 void ModuleEditor::chooseAssets() {
     wxDialog dialog(this,wxID_ANY,"Module game resources");
     auto* root=new wxBoxSizer(wxVERTICAL);
@@ -592,6 +757,7 @@ void ModuleEditor::chooseAssets() {
     auto installation=neoshared::game::inspectGameInstallation(neosettings::pathFromWx(directory->GetValue()),id);
     if(!installation)throw std::runtime_error("Choose a K1 or K2 installation containing chitin.key and its game data.");
     install_=std::move(installation);session_.reset();moduleName_=neomdl::resourceKey(wxui::toStd(scope->GetValue()));
+    palette_->clear();paletteSession_.reset();
     game_=id==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
     gameChoice_->SetSelection(game->GetSelection());
     auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
@@ -602,6 +768,7 @@ void ModuleEditor::chooseAssets() {
 void ModuleEditor::startPreview() {
     std::map<Key,ResourceDocument> edits;
     for(const auto& [key,resource]:resources_)edits.emplace(key,resource.source);
+    for(const auto& [key,source]:addedTemplates_)edits.emplace(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
     auto pending=canvas_->prepareAreaLoad();
     cancel_=std::make_shared<std::atomic<bool>>(false);loadingRevision_=revision_;requested_=false;
@@ -659,6 +826,9 @@ void ModuleEditor::tick() {
             if(loadingRevision_==revision_) {
                 session_=std::move(result.session);
                 canvas_->installArea(std::move(result.scene),{},previewCurrent_);previewCurrent_=true;
+                if(session_&&paletteSession_!=session_) {
+                    palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
+                }
                 previewError_.clear();
                 mapOwners();setModuleStatusText("Live preview — edits update the area. Drag to orbit; right-drag to pan; scroll to zoom.");
             }
@@ -682,21 +852,21 @@ void ModuleEditor::tick() {
 }
 
 bool ModuleEditor::saveResources() {
-    wxDirDialog dialog(this,"Save GIT, ARE and IFO resources to a working folder",{},wxDD_DEFAULT_STYLE);
+    wxDirDialog dialog(this,"Save module resources and imported templates to a working folder",{},wxDD_DEFAULT_STYLE);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
-    for(const auto& [key,resource]:resources_) {
-        const auto destination=directory/neoshared::pathFromUtf8(resource.source.fileName);
+    std::vector<std::filesystem::path> exports;
+    for(const auto& [key,resource]:resources_)exports.push_back(neoshared::pathFromUtf8(resource.source.fileName));
+    for(const auto& [key,source]:addedTemplates_)exports.push_back(neoshared::pathFromUtf8(source.fileName));
+    for(const auto& file:exports) {
+        const auto destination=directory/file;
         validateHostOutput(destination);neoshared::checkResourceOutput(destination,inputs_);
     }
     bool overwrite=false;
-    for(const auto& [key,resource]:resources_)overwrite|=std::filesystem::exists(directory/neoshared::pathFromUtf8(resource.source.fileName));
+    for(const auto& file:exports)overwrite|=std::filesystem::exists(directory/file);
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
     for(auto& [key,resource]:resources_)if(resource.model->dirty())stage(resource);
-    for(auto& [key,resource]:resources_) {
-        std::filesystem::copy_file(staging_/neoshared::pathFromUtf8(resource.source.fileName),
-            directory/neoshared::pathFromUtf8(resource.source.fileName),std::filesystem::copy_options::overwrite_existing);
-    }
+    for(const auto& file:exports)std::filesystem::copy_file(staging_/file,directory/file,std::filesystem::copy_options::overwrite_existing);
     saved();setModuleStatusText("Saved module resources to "+neosettings::pathToWx(directory));return true;
 }
 
@@ -713,6 +883,7 @@ bool ModuleEditor::saveArchive() {
     for(auto& [key,resource]:resources_) {
         archive.add_resource(staging_/neoshared::pathFromUtf8(resource.source.fileName),true);
     }
+    for(const auto& [key,source]:addedTemplates_)archive.add_resource(staging_/neoshared::pathFromUtf8(source.fileName),true);
     archive.save(path);saved();setModuleStatusText("Saved module archive copy: "+neosettings::pathToWx(path));return true;
 }
 
