@@ -1,5 +1,6 @@
 #include "ModuleEditorPanel.hpp"
 #include "ObjectPalette.hpp"
+#include "AreaControls.hpp"
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
@@ -133,6 +134,15 @@ public:
             objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
         objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
         palette_=new ObjectPalette(objectTabs_);objectTabs_->AddPage(objectPage,"Objects");objectTabs_->AddPage(palette_,"Add objects");
+        areaControls_=new AreaControls(objectTabs_,[this](const std::string& field,const std::string& value,const std::string& label){
+            rememberSelection();auto& resource=resources_.at({controlsArea_,kAre});
+            resource.model->setValue(field,value);stage(resource);
+            selecting_=true;fields_->activateResource(resource.source.identity);fields_->selectField(field);selecting_=false;
+            refreshAreaControls();recordEdit("Edit area "+label);requestPreview();
+        },[this]{
+            try {applyAreaPreviewPhase();}catch(const std::exception& e){wxui::showError(this,e);}
+        });
+        objectTabs_->AddPage(areaControls_,"Area");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -182,11 +192,11 @@ public:
             palette_->clear();paletteSession_.reset();
             auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
             canvas_->setDocument(document.get());document_=std::move(document);
-            pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;requestPreview();
+            pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;refreshAreaControls();requestPreview();
         });
         areas_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
             selectedPath_.clear();pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;
-            canvas_->clearArea();rebuildObjects();activateAreaResource();rememberSelection();requestPreview();
+            canvas_->clearArea();rebuildObjects();activateAreaResource();refreshAreaControls();rememberSelection();requestPreview();
         });
         objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);rememberSelection();});
         gizmoTool_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
@@ -198,7 +208,7 @@ public:
         };
         gridSnap_->Bind(wxEVT_CHOICE,snapping);rotationSnap_->Bind(wxEVT_CHOICE,snapping);walkmeshSnap_->Bind(wxEVT_CHECKBOX,snapping);
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
-            if(event.GetSelection()==0)palette_->stopPlacing();
+            if(event.GetSelection()!=1)palette_->stopPlacing();
             event.Skip();
         });
         apply_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
@@ -354,6 +364,7 @@ private:
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent& event){
             try {
                 auto& resource=resources_.at(identityKeys_.at(wxui::toStd(event.GetString())));
+                if(resource.source.type==kAre)refreshAreaControls();
                 stage(resource);rebuildObjects();recordEdit("Edit field");requestPreview();
             } catch(const std::exception& e) {wxui::showError(this,e);}
         });
@@ -399,6 +410,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
+        areaControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
         palette_->clear();paletteSession_.reset();addedTemplates_.clear();importedTemplates_.clear();templatesDirty_=false;
         selecting_=true;fields_->clearDocuments();
         resources_=std::move(resources);identityKeys_.clear();inputs_.clear();
@@ -420,7 +432,7 @@ private:
         savedBytes_.clear();savedTemplateKeys_.clear();
         for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.source.bytes);
         rebuildObjects();activateAreaResource();selecting_=false;
-        history_.push_back(captureEdit());setAppearance(dark_,scale_);updateActions();
+        history_.push_back(captureEdit());refreshAreaControls();setAppearance(dark_,scale_);updateActions();
         setModuleStatusText("Module loaded. Edit a field or choose Game resources to load the 3D view.");
     }
     std::string areaName() const {return wxui::toStd(areas_->GetStringSelection());}
@@ -447,6 +459,18 @@ private:
         return wxNOT_FOUND;
     }
     void applyTransform();
+    void refreshAreaControls() {
+        controlsArea_=areaName();const auto resource=resources_.find({controlsArea_,kAre});
+        areaControls_->load(resource==resources_.end()?nullptr:resource->second.model->gff().root(),game_==neomdl::model::GameVersion::Kotor2);
+    }
+    void applyAreaPreviewPhase() {
+        const auto phase=areaControls_->previewPhase();
+        if(phase==0)canvas_->clearAreaEnvironmentReplay();
+        else {
+            neomdl::AreaEnvironmentReplayState state;state.phase=phase==1?neomdl::AreaTimeOfDay::Day:neomdl::AreaTimeOfDay::Night;
+            std::string error;if(!canvas_->applyAreaEnvironmentReplay(std::move(state),error))throw std::runtime_error(error);
+        }
+    }
     void previewTransform(const Placement& placement,Vec3 position,float heading);
     void gizmoChanged(const neomdl::ui::AreaGizmoEvent& event);
     void updateGizmo();
@@ -502,6 +526,7 @@ private:
         editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
         gizmoTool_->Enable(editing&&loaded);
         objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
+        areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&placements_[objects_->GetSelection()].list=="TriggerList"&&previewCurrent_&&editing;
@@ -565,6 +590,7 @@ private:
     wxStaticText* sourceLabel_{};wxChoice* areas_{};wxChoice* gameChoice_{};wxListBox* objects_{};
     wxTextCtrl* transform_[4]{};wxButton* apply_{};
     wxNotebook* objectTabs_{};ObjectPalette* palette_{};
+    AreaControls* areaControls_{};std::string controlsArea_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
     bool drawingNewTrigger_{};
@@ -636,12 +662,13 @@ void ModuleEditor::restoreEdit(std::size_t index) {
         resource.source.bytes=state.bytes.at(key);
         resource.model->gff().LoadBytes(resource.source.bytes);writeResource(staging_,resource.source);
     }
+    refreshAreaControls();
     addedTemplates_=state.templates;importedTemplates_=state.imports;
     for(const auto& [key,source]:addedTemplates_)writeResource(staging_,source);
     historyIndex_=index;selectedPath_=state.path;
     const auto areaChanged=areaName()!=state.area;areas_->SetStringSelection(wxui::toWx(state.area));
     if(areaChanged) {canvas_->clearArea();previewCurrent_=false;ownerPaths_.clear();pathOwners_.clear();}
-    updateDirty();fields_->activateResource(state.identity);fields_->refreshActiveDocument();rebuildObjects();
+    updateDirty();fields_->activateResource(state.identity);fields_->refreshActiveDocument();rebuildObjects();refreshAreaControls();
     const auto selected=objects_->GetSelection();
     if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
     selecting_=false;requestPreview();
@@ -1089,6 +1116,7 @@ void ModuleEditor::chooseAssets() {
     palette_->clear();paletteSession_.reset();
     game_=id==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
     gameChoice_->SetSelection(game->GetSelection());
+    refreshAreaControls();
     auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+moduleName_,moduleName_,game_);
     canvas_->setDocument(document.get());document_=std::move(document);
     previewCurrent_=false;previewEnabled_=true;requestPreview();
@@ -1155,6 +1183,7 @@ void ModuleEditor::tick() {
             if(loadingRevision_==revision_) {
                 session_=std::move(result.session);
                 canvas_->installArea(std::move(result.scene),{},previewCurrent_);previewCurrent_=true;
+                applyAreaPreviewPhase();
                 if(session_&&paletteSession_!=session_) {
                     palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
                 }
