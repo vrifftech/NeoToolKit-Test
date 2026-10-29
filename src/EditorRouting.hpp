@@ -2,6 +2,7 @@
 #include <neoshared/bif/KeyBifArchive.hpp>
 #include <gff/AppModel.hpp>
 #include <core/ArchiveDocument.hpp>
+#include <core/ModelFilenames.hpp>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -14,6 +15,9 @@ enum class EditorKind : std::size_t {
 };
 inline constexpr std::size_t kEditorCount=9;
 struct EditorChoice { EditorKind kind; std::string id; std::string label; };
+inline std::string editorExtensionForPath(const std::filesystem::path& path) {
+    return neomdl::asciiModelSuffix(path) ? ".mdl" : neoshared::pathToUtf8(path.extension());
+}
 inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
     if(!ext.empty() && ext.front()!='.')ext='.'+ext;

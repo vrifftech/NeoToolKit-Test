@@ -30,7 +30,7 @@ constexpr const char* kEditorPageTitles[kEditorCount]={
     "Dialogues","Journals","Models","Textures","Archives"
 };
 std::string resourceExtension(const neoshared::ResourceDocument& resource) {
-    return std::filesystem::path(resource.fileName).extension().string();
+    return editorExtensionForPath(neoshared::pathFromUtf8(resource.fileName));
 }
 std::vector<EditorChoice> editorsForResource(const neoshared::ResourceDocument& resource) {
     const std::string extension = resourceExtension(resource);
@@ -154,7 +154,7 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
-            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
+            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
         if(path)openPath(*path);
     },ID_Open);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){wxMessageBox(
@@ -214,6 +214,7 @@ void WorkspaceFrame::switchMenus(std::size_t index) {
 neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     if(auto* panel=panelFor(kind))return panel;
     neomodules::Context context;context.embedded=true;context.closeRequested=[this]{Close();};
+    context.compact=kind==EditorKind::Models;
     context.validateOutput=[this](const auto& path,const auto* owner){checkOutput(path,owner);};
     context.resolveResource=[this](const std::string& resref,std::uint16_t type){
         return browser_->resolveResource(resref,type);
@@ -401,7 +402,9 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
-    case EditorKind::Models:ok=models_->openResource(std::move(resource));break;
+    case EditorKind::Models:
+        showEditor(selected);
+        ok=models_->openResource(std::move(resource));break;
     case EditorKind::Textures:ok=textures_->openResource(std::move(resource));break;
     case EditorKind::Archives:ok=archives_->openResource(std::move(resource));break;
     }
@@ -413,7 +416,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
 }
 void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::string& editor) {
     try {
-        auto ext=neoshared::pathToUtf8(path.extension());std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+        auto ext=editorExtensionForPath(path);std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
         std::error_code ec;
         if(std::filesystem::is_directory(path,ec)||ext==".key") {
             if(!editor.empty())throw std::runtime_error("Choose a resource inside the game browser, not an editor for a KEY/directory.");
@@ -431,7 +434,9 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
         case EditorKind::Gff:ok=structured_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
-        case EditorKind::Models:ok=models_->openFile(path);break;
+        case EditorKind::Models:
+            showEditor(selected);
+            ok=models_->openFile(path);break;
         case EditorKind::Textures:ok=textures_->openFile(path);break;
         case EditorKind::Archives: {
             auto sources=browser_->sourcePaths();sources.insert(sources.end(),protectedInputs_.begin(),protectedInputs_.end());
