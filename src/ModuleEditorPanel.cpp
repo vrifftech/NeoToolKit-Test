@@ -567,7 +567,6 @@ private:
     void editBlueprint();
     void refreshBlueprintEditor();
     bool blueprintChanged(const EditState& state) const;
-    bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.snapshot;
         savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
@@ -743,7 +742,7 @@ void ModuleEditor::editCamera(const neomdl::AreaCameraRecord& camera) {
 
 neomdl::ResourceResolver ModuleEditor::moduleResources() const {
     std::map<Key,ResourceDocument> edits;
-    for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
+    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.insert_or_assign(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
     return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives=archiveResources_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
@@ -1407,7 +1406,7 @@ void ModuleEditor::chooseAssets() {
 
 void ModuleEditor::startPreview() {
     std::map<Key,ResourceDocument> edits;
-    for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
+    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.emplace(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
     auto pending=canvas_->prepareAreaLoad();
