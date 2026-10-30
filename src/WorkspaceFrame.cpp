@@ -221,7 +221,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     if(auto* panel=panelFor(kind))return panel;
     neomodules::Context context;context.embedded=true;context.closeRequested=[this]{Close();};
     context.compact=kind==EditorKind::Models||kind==EditorKind::Modules;
-    context.validateOutput=[this](const auto& path,const auto* owner,const auto& inputs){checkOutput(path,owner,inputs);};
+    context.validateOutputs=[this](const auto& paths,const auto* owner,const auto& inputs){checkOutputs(paths,owner,inputs);};
     context.resolveResource=[this](const std::string& resref,std::uint16_t type){
         return browser_->resolveResource(resref,type);
     };
@@ -387,7 +387,7 @@ void WorkspaceFrame::applyAppearance() {
     for(auto* panel:panels())if(panel)panel->setAppearance(dark_,fontScale_);
     if(auto* bar=GetMenuBar())bar->Check(ID_Dark,dark_);
 }
-void WorkspaceFrame::checkOutput(const std::filesystem::path& path,const neomodules::Panel* owner,
+void WorkspaceFrame::checkOutputs(const std::vector<std::filesystem::path>& paths,const neomodules::Panel* owner,
     const std::vector<std::filesystem::path>& localInputs) const {
     auto inputs=localInputs;inputs.insert(inputs.end(),protectedInputs_.begin(),protectedInputs_.end());
     const auto browserInputs=browser_->sourcePaths();
@@ -395,7 +395,7 @@ void WorkspaceFrame::checkOutput(const std::filesystem::path& path,const neomodu
     for(auto* panel:panels())if(panel && panel!=owner) {
         const auto open=panel->openPaths();inputs.insert(inputs.end(),open.begin(),open.end());
     }
-    neoshared::checkResourceOutput(path,inputs);
+    neoshared::checkResourceOutputs(paths,inputs,false);
 }
 bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std::string& editor) {
     return openSnapshot(std::move(resource),editor,true);

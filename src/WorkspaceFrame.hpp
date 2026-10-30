@@ -53,7 +53,7 @@ private:
     int editorPage(EditorKind kind) const;
     std::size_t editorForPage(int page) const;
     void applyAppearance();
-    void checkOutput(const std::filesystem::path& path,const neomodules::Panel* owner,
+    void checkOutputs(const std::vector<std::filesystem::path>& paths,const neomodules::Panel* owner,
                      const std::vector<std::filesystem::path>& localInputs) const;
     std::vector<neomodules::Panel*> panels() const;
     neobif::ui::BrowserPanel* browser_{};

@@ -392,7 +392,7 @@ private:
     }
     void createFields() {
         neomodules::Context context;context.embedded=true;context.compact=true;
-        context.validateOutput=context_.validateOutput;
+        context.validateOutputs=context_.validateOutputs;
         fields_=neogff::ui::createEditorPanel(split_,std::move(context),true);
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent& event){
             try {
@@ -1485,11 +1485,10 @@ bool ModuleEditor::saveResources() {
     std::vector<const ResourceDocument*> exports;
     for(const auto& [key,resource]:resources_)if(editableResource(key.second))exports.push_back(&resource.source);
     for(const auto& [key,source]:addedTemplates_)exports.push_back(&source);
-    for(const auto* source:exports) {
-        const auto destination=directory/neoshared::pathFromUtf8(source->fileName);
-        validateHostOutput(destination,inputs_);
-    }
-    const bool overwrite=std::any_of(exports.begin(),exports.end(),[&](const auto* source){return std::filesystem::exists(directory/neoshared::pathFromUtf8(source->fileName));});
+    std::vector<std::filesystem::path> destinations;
+    for(const auto* source:exports)destinations.push_back(directory/neoshared::pathFromUtf8(source->fileName));
+    validateHostOutputs(destinations,inputs_);
+    const bool overwrite=std::any_of(destinations.begin(),destinations.end(),[](const auto& path){return std::filesystem::exists(path);});
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
     for(const auto* source:exports)writeResource(directory,*source);
     saved();setModuleStatusText("Saved module resources to "+neosettings::pathToWx(directory));return true;
