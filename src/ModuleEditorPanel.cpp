@@ -1500,9 +1500,9 @@ void ModuleEditor::duplicateObject() {
     auto copy=list.GetStruct(p.index)->Clone();
     if(p.list=="CameraList") {
         std::set<std::int32_t> ids;
-        for(const auto& camera:list.allStructs())ids.insert(static_cast<const neogff::GffIntField&>(*camera->GetFieldByLabel("CameraID")).value);
+        for(const auto& camera:cameraControls_->records())ids.insert(camera.cameraId);
         std::int32_t id=0;while(ids.count(id))++id;
-        static_cast<neogff::GffIntField&>(*static_cast<neogff::GffStruct&>(*copy).GetFieldByLabel("CameraID")).value=id;
+        setField(static_cast<neogff::GffStruct&>(*copy),std::make_unique<neogff::GffIntField>("CameraID",id));
     }
     selectedPath_=p.list+"\\"+std::to_string(list.count());
     list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));resource.model->gff().dirty(true);
