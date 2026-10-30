@@ -736,8 +736,8 @@ neomdl::ResourceResolver ModuleEditor::moduleResources() const {
     for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.insert_or_assign(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
-    return [edits=std::move(edits),catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
-        const Key key{neomdl::resourceKey(name),type};if(const auto found=edits.find(key);found!=edits.end())return found->second;
+    return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+        const Key key{neomdl::resourceKey(name),type};if(const auto found=edits->find(key);found!=edits->end())return found->second;
         for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==key.first)return readArchiveResource(*catalog,entry);
         if(local)if(auto source=local(name,type))return source;
         return game(name,type);
@@ -1411,10 +1411,10 @@ void ModuleEditor::startPreview() {
         if(!session&&installation) {
             session=openModuleAssets(*installation,module,job);
         }
-        auto resolver=[edits=std::move(edits),catalog,host,local,session](const std::string& name,std::uint16_t type)
+        auto resolver=[edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),catalog,host,local,session](const std::string& name,std::uint16_t type)
                 ->std::optional<ResourceDocument> {
             const auto key=Key{neomdl::resourceKey(name),type};
-            if(const auto found=edits.find(key);found!=edits.end())return found->second;
+            if(const auto found=edits->find(key);found!=edits->end())return found->second;
             for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==key.first)
                 return readArchiveResource(*catalog,entry);
             if(local)if(auto resource=local(name,type))return resource;

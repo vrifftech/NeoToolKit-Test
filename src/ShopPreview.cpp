@@ -83,8 +83,15 @@ void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver
     resolver_=resolver;items_.clear();selection_=selected;
     if(!loaded())return;
     neomdl::detail::AreaLoadTables tables{resolver,{}};
+    std::map<std::string,GffFile> templates;
     if(const auto* list=field<GffList>(store,"ItemList"))for(std::size_t i=0;i<list->count();++i) {
-        const auto& record=*list->GetStruct(i);const auto resource=resolver_(string(record,"InventoryRes"),2025).value();GffFile item;item.LoadBytes(resource.bytes);const auto& root=*item.root();
+        const auto& record=*list->GetStruct(i);const auto name=neomdl::resourceKey(string(record,"InventoryRes"));
+        auto item=templates.find(name);
+        if(item==templates.end()) {
+            const auto resource=resolver_(name,2025).value();
+            item=templates.try_emplace(name).first;item->second.LoadBytes(resource.bytes);
+        }
+        const auto& root=*item->second.root();
         Item row;row.source=i;row.name=localized(root,"LocalizedName",tlk_);
         row.description=localized(root,byte(root,"Identified",1)&&root.GetFieldByLabel("DescIdentified")?"DescIdentified":"Description",tlk_);
         row.stack=word(root,"StackSize",1);row.infinite=(byte(record,"Infinite")&1)!=0;row.plot=byte(root,"Plot")!=0;
