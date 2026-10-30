@@ -104,6 +104,7 @@ std::optional<ModulePackageSources> chooseModulePackageSources(wxWindow* parent,
 ModulePackage collectModulePackage(const ModulePackageSources& sources,const Path& looseDirectory,
     std::vector<ModulePackageInput> edits,const std::vector<ModulePackageInput>& inlineSources,const neomdl::ResourceResolver& resolver,neomdl::model::GameVersion game,
     const std::function<void(const std::string&)>& progress) {
+    neomdl::ResourceLoadScope loading(neomdl::resourceLoadJob());
     std::map<Key,ModulePackageInput> entries;std::vector<std::string> shadowed;
     std::set<Key> edited;for(const auto& edit:edits)edited.insert(keyOf(edit.source));
     std::map<Key,Path> looseFiles;
