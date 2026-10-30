@@ -97,6 +97,7 @@ ObjectPalette::ObjectPalette(wxWindow* parent,bool inventory):wxPanel(parent),in
 void ObjectPalette::setResources(std::shared_ptr<neomdl::GameResourceSession> session,
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,std::filesystem::path directory) {
     active_=std::move(session);selected_=active_;catalog_=std::move(catalog);directory_=std::move(directory);
+    archiveResources_=neomdl::archiveResources(catalog_);
     scopes_.clear();scope_->Clear();scope_->Append("Current module + game files");
     for(const auto& module:active_->modules())if(module.name!=active_->moduleScope()->name) {
         scopes_.push_back(module);scope_->Append(wxui::toWx(module.name));
@@ -105,6 +106,7 @@ void ObjectPalette::setResources(std::shared_ptr<neomdl::GameResourceSession> se
 }
 void ObjectPalette::clear() {
     stopPlacing();active_.reset();selected_.reset();blueprints_.clear();scopes_.clear();
+    archiveResources_={};
     entries_->DeleteAllItems();scope_->Clear();scope_->Disable();kind_->Disable();search_->Disable();
     summary_->SetLabel("Choose Game resources to browse templates.");setPlacementEnabled(false);
 }
@@ -156,13 +158,8 @@ neomdl::ResourceResolver ObjectPalette::selectedResources() const {
     auto resolve=selected_->resolver();
     if(scope_->GetSelection()!=0)return resolve;
     auto local=directory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory_);
-    return [catalog=catalog_,local,resolve](const std::string& name,std::uint16_t type)->std::optional<neoshared::ResourceDocument> {
-        for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==neomdl::resourceKey(name)) {
-            const auto& archive=catalog->archives().at(entry.archiveIndex);
-            neoshared::ResourceDocument source{neoshared::pathToUtf8(archive.resolvedPath)+"#"+entry.fileName(),
-                entry.fileName(),neoshared::pathToUtf8(archive.resolvedPath),entry.type,{}, {archive.resolvedPath}};
-            std::string error;if(!catalog->readResource(entry.index,source.bytes,error))throw std::runtime_error(error);return source;
-        }
+    return [archives=archiveResources_,local,resolve](const std::string& name,std::uint16_t type)->std::optional<neoshared::ResourceDocument> {
+        if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
         return resolve(name,type);
     };

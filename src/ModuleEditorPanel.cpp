@@ -346,6 +346,7 @@ public:
             if(archive&&moduleName_.size()>2&&moduleName_.substr(moduleName_.size()-2)=="_s")moduleName_.resize(moduleName_.size()-2);
             if(moduleName_=="module")moduleName_=neomdl::resourceKey(neoshared::pathToUtf8(path.parent_path().filename()));
             catalog_=std::move(catalog);localDirectory_=archive?std::filesystem::path{}:path.parent_path();
+            archiveResources_=neomdl::archiveResources(catalog_);
             hostResources_=captureHostResources();
             install_.reset();session_.reset();previewEnabled_=false;
             installResources(std::move(resources),neoshared::pathToUtf8(path));
@@ -372,6 +373,7 @@ public:
             if(!resources.count({"module",kIfo}))if(auto ifo=resolver("module",kIfo))
                 resources.emplace(Key{"module",kIfo},Resource{std::move(*ifo),{}});
             archivePath_.clear();localDirectory_.clear();catalog_=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
+            archiveResources_=neomdl::archiveResources(catalog_);
             hostResources_=std::move(resolver);moduleName_=names.empty()?key.first:*names.begin();
             install_.reset();session_.reset();previewEnabled_=true;
             installResources(std::move(resources),"Module resources from Game Explorer");
@@ -695,7 +697,7 @@ private:
     std::map<std::string,std::string> ownerPaths_;
     std::map<std::string,std::set<neomdl::LightOwnerId>> pathOwners_;
     std::string selectedPath_,moduleName_,sourceTitle_,previewError_;
-    neomdl::ResourceResolver hostResources_;
+    neomdl::ResourceResolver hostResources_,archiveResources_;
     std::unique_ptr<neomdl::ModelDocument> document_;
     neomdl::model::GameVersion game_{neomdl::model::GameVersion::Kotor2};
     std::optional<neoshared::game::GameInstall> install_;
@@ -744,9 +746,9 @@ neomdl::ResourceResolver ModuleEditor::moduleResources() const {
     for(const auto& [key,resource]:resources_)if(exportsResource(key))edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.insert_or_assign(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
-    return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+    return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives=archiveResources_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
         const Key key{neomdl::resourceKey(name),type};if(const auto found=edits->find(key);found!=edits->end())return found->second;
-        for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==key.first)return readArchiveResource(*catalog,entry);
+        if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
         return game(name,type);
     };
@@ -1230,8 +1232,7 @@ void ModuleEditor::deleteObject() {
 
 std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& name,std::uint16_t type) const {
     if(const auto found=addedTemplates_.find({name,type});found!=addedTemplates_.end())return found->second;
-    for(const auto& entry:catalog_->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==name)
-        return readArchiveResource(*catalog_,entry);
+    if(auto source=archiveResources_(name,type))return source;
     if(!localDirectory_.empty())if(auto source=neomdl::directoryResources(localDirectory_)(name,type))return source;
     return session_->resolve(name,type);
 }
@@ -1413,19 +1414,18 @@ void ModuleEditor::startPreview() {
     cancel_=std::make_shared<std::atomic<bool>>(false);loadingRevision_=revision_;requested_=false;
     canvas_->setLoading(true);setModuleStatusText("Loading the edited area...");
     loading_=std::async(std::launch::async,[scene=std::move(pending),edits=std::move(edits),
-        catalog=catalog_,host=hostResources_,local,session=session_,installation=install_,
+        archives=archiveResources_,host=hostResources_,local,session=session_,installation=install_,
         module=moduleName_,area=areaName(),game=game_,cancel=cancel_]() mutable {
         neoshared::bif::JobControl job;job.cancelled=[cancel]{return cancel->load();};
         neomdl::ResourceLoadScope work(job);
         if(!session&&installation) {
             session=openModuleAssets(*installation,module,job);
         }
-        auto resolver=[edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),catalog,host,local,session](const std::string& name,std::uint16_t type)
+        auto resolver=[edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives,host,local,session](const std::string& name,std::uint16_t type)
                 ->std::optional<ResourceDocument> {
             const auto key=Key{neomdl::resourceKey(name),type};
             if(const auto found=edits->find(key);found!=edits->end())return found->second;
-            for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==key.first)
-                return readArchiveResource(*catalog,entry);
+            if(auto resource=archives(name,type))return resource;
             if(local)if(auto resource=local(name,type))return resource;
             if(session)return session->resolve(name,type);
             return host(name,type);
@@ -1543,8 +1543,8 @@ bool ModuleEditor::packageModule() {
     if(session_)for(const auto& path:session_->moduleScope()->archives)addArchive(path);
     const auto sources=chooseModulePackageSources(this,std::move(archives),localDirectory_,dark_);if(!sources)return false;
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
-    const auto resolve=[catalog=catalog_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
-        for(const auto& entry:catalog->resources())if(entry.type==type&&neomdl::resourceKey(entry.resref)==neomdl::resourceKey(name))return readArchiveResource(*catalog,entry);
+    const auto resolve=[archives=archiveResources_,local,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+        if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
         return game(name,type);
     };

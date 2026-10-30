@@ -75,6 +75,7 @@ private:
     wxButton* draw_{};
     std::shared_ptr<neomdl::GameResourceSession> active_,selected_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
+    neomdl::ResourceResolver archiveResources_;
     std::filesystem::path directory_;
     std::vector<neomdl::ModuleScope> scopes_;
     std::vector<neomdl::GameResourceEntry> blueprints_;
