@@ -10,6 +10,7 @@
 #include "core/GameResourceSession.hpp"
 #include "core/Engine2DA.hpp"
 #include "core/RoomEditing.hpp"
+#include "core/ModelTransform.hpp"
 #include <twoda/TwoDAFile.hpp>
 #include "NeoViewState.hpp"
 #include <neoshared/bif/LooseArchiveCatalog.hpp>
@@ -225,8 +226,15 @@ public:
         auto* roomFields=new wxFlexGridSizer(2,4,6);roomFields->AddGrowableCol(1);
         for(std::size_t i=0;i<3;++i) {roomFields->Add(new wxStaticText(roomsPage_,wxID_ANY,wxString("LYT ")+axisNames[i]),0,wxALIGN_CENTER_VERTICAL);roomPosition_[i]=new wxTextCtrl(roomsPage_,wxID_ANY);roomFields->Add(roomPosition_[i],1,wxEXPAND);}
         roomsBox->Add(roomFields,0,wxEXPAND|wxALL,5);
-        moveRoomObjects_=new wxCheckBox(roomsPage_,wxID_ANY,"Move contained objects and entry point");moveRoomObjects_->SetValue(true);roomsBox->Add(moveRoomObjects_,0,wxALL,5);
+        moveRoomObjects_=new wxCheckBox(roomsPage_,wxID_ANY,"Carry contained positions and facing");moveRoomObjects_->SetValue(true);moveRoomObjects_->SetToolTip("Includes the module entry, camera orientation, trigger/encounter footprints and encounter spawn points. Placed objects keep their model shapes.");roomsBox->Add(moveRoomObjects_,0,wxALL,5);
         applyRoom_=new wxButton(roomsPage_,wxID_ANY,"Apply room position");roomsBox->Add(applyRoom_,0,wxEXPAND|wxALL,5);
+        roomsBox->Add(new wxStaticText(roomsPage_,wxID_ANY,"Rotation / flip pivot"),0,wxALL,5);
+        roomPivot_=new wxChoice(roomsPage_,wxID_ANY);roomPivot_->Append("Room origin (LYT)");roomPivot_->Append("Room center");roomPivot_->SetSelection(0);roomsBox->Add(roomPivot_,0,wxEXPAND|wxALL,5);
+        roomAngle_=new wxTextCtrl(roomsPage_,wxID_ANY,"90");roomAngle_->SetToolTip("Relative counterclockwise rotation in degrees around world Z.");roomsBox->Add(new wxStaticText(roomsPage_,wxID_ANY,"Rotate by (degrees)"),0,wxALL,5);roomsBox->Add(roomAngle_,0,wxEXPAND|wxALL,5);
+        auto* roomTransforms=new wxWrapSizer(wxHORIZONTAL);
+        const char* roomTransformLabels[]={"Rotate room","Flip X","Flip Y"};
+        for(unsigned i=0;i<3;++i) {transformRoom_[i]=new wxButton(roomsPage_,wxID_ANY,roomTransformLabels[i]);roomTransforms->Add(transformRoom_[i],0,wxALL,3);}
+        roomsBox->Add(roomTransforms,0,wxEXPAND);
         auto* saveRoom=new wxButton(roomsPage_,wxID_ANY,"Save room edits...");roomsBox->Add(saveRoom,0,wxEXPAND|wxALL,5);
         roomsBox->Add(new wxStaticText(roomsPage_,wxID_ANY,"WOK boundary connections"),0,wxALL,5);
         roomEdges_=new wxListCtrl(roomsPage_,wxID_ANY,wxDefaultPosition,FromDIP(wxSize(-1,170)),wxLC_REPORT|wxLC_SINGLE_SEL);
@@ -240,7 +248,7 @@ public:
         visibleRooms_=new wxCheckListBox(roomsPage_,wxID_ANY,wxDefaultPosition,FromDIP(wxSize(-1,160)));roomsBox->Add(visibleRooms_,0,wxEXPAND|wxALL,5);
         visibilityInfo_=new wxStaticText(roomsPage_,wxID_ANY,"Load a 3D area to edit room visibility.");visibilityInfo_->Wrap(FromDIP(195));roomsBox->Add(visibilityInfo_,0,wxEXPAND|wxALL,5);
         saveVisibility_=new wxButton(roomsPage_,wxID_ANY,"Save VIS...");roomsBox->Add(saveVisibility_,0,wxEXPAND|wxALL,5);
-        auto* roomHelp=new wxStaticText(roomsPage_,wxID_ANY,"Move rooms with XYZ fields or the gizmo. Contained objects are identified from the room walkmesh. Save room edits exports the coordinated resources. Room indices, connections and VIS membership are retained; inspect gaps after moving.\n\nClick an edge to inspect it; drag to orbit. Double-click a connection to inspect its neighbor.\n\nGray: boundary. Green: aligned return link. Amber: gap or missing return link. Red: target unavailable. Yellow: selected edge; cyan: closest target edge.\n\nVIS checks apply to both rooms. Save resources and Package MOD include room and VIS edits.");
+        auto* roomHelp=new wxStaticText(roomsPage_,wxID_ANY,"Move rooms with XYZ fields or the gizmo. Rotate by a relative angle around world Z, or reflect X/Y around the chosen pivot. Room geometry and WOK are saved together. Contained positions and facing can follow; objects keep their model shapes.\n\nContained objects are identified from the room walkmesh. Save room edits exports the coordinated resources. Room indices, connections and VIS membership are retained; inspect gaps after transforms.\n\nClick an edge to inspect it; drag to orbit. Double-click a connection to inspect its neighbor.\n\nGray: boundary. Green: aligned return link. Amber: gap or missing return link. Red: target unavailable. Yellow: selected edge; cyan: closest target edge.\n\nVIS checks apply to both rooms. Save resources and Package MOD include room and VIS edits.");
         roomHelp->Wrap(FromDIP(195));roomsBox->Add(roomHelp,0,wxEXPAND|wxALL,5);roomsPage_->SetSizer(roomsBox);objectTabs_->AddPage(roomsPage_,"Rooms / VIS");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
@@ -320,6 +328,10 @@ public:
             commitRoomMove(position);
         }catch(const std::exception& e){wxui::showError(this,e);}});
         saveRoom->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {saveResources();}catch(const std::exception& e){wxui::showError(this,e);}});
+        for(unsigned i=0;i<3;++i)transformRoom_[i]->Bind(wxEVT_BUTTON,[this,i](wxCommandEvent&){try {
+            const auto degrees=i==0?neogff::ParseFloatDecimal(wxui::toStd(roomAngle_->GetValue())):0.0f;
+            transformRoom(neomdl::planarTransform(degrees,i==1,i==2),i==0?"Rotate room":"Flip room");
+        }catch(const std::exception& e){wxui::showError(this,e);}});
         previewVisibility_->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){configureRoomView();});
         xrayConnections_->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){configureRoomView();});
         roomEdges_->Bind(wxEVT_LIST_ITEM_SELECTED,[this](wxListEvent& event){selectRoomEdge(std::size_t(event.GetIndex()));});
@@ -714,7 +726,9 @@ private:
     void moveVertices(const neomdl::ui::AreaGizmoEvent& event);
     void moveRoomGizmo(const neomdl::ui::AreaGizmoEvent& event);
     void commitRoomMove(Vec3 position);
-    void translatePlacement(const Placement& placement,Vec3 offset);
+    void translatePlacement(const Placement& placement,Vec3 offset,bool moveSpawns=true);
+    void transformRoom(const neomdl::PlanarTransform& transform,const std::string& action);
+    void transformPlacement(const Placement& placement,const neomdl::PlanarTransform& transform,Vec3 pivot);
     void updateDirty();
     void duplicateObject();
     void deleteObject();
@@ -896,6 +910,7 @@ private:
     std::set<Key> managedRoomResources_;
     bool roomViewActive_{};
     wxCheckBox* moveRoom_{};wxCheckBox* moveRoomObjects_{};wxTextCtrl* roomPosition_[3]{};wxButton* applyRoom_{};
+    wxChoice* roomPivot_{};wxTextCtrl* roomAngle_{};wxButton* transformRoom_[3]{};
     wxTextCtrl* vertexPosition_[3]{};wxButton* applyVertices_{};wxButton* faceVertices_{};
     enum class GizmoTarget {Object,Room,Vertices};GizmoTarget gizmoTarget_{GizmoTarget::Object};
     Vec3 editPivot_{},roomMoveOrigin_{};
@@ -1696,11 +1711,11 @@ void ModuleEditor::moveRoomGizmo(const neomdl::ui::AreaGizmoEvent& event) {
     }
 }
 
-void ModuleEditor::translatePlacement(const Placement& p,Vec3 offset) {
+void ModuleEditor::translatePlacement(const Placement& p,Vec3 offset,bool moveSpawns) {
     auto& resource=resources_.at(identityKeys_.at(p.identity));auto& root=*resource.model->gff().root();
     auto& record=p.coordinates==Placement::Coordinates::Entry?root:*static_cast<neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
     const float delta[]={offset.x,offset.y,offset.z};
-    if(p.list=="Encounter List")if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))
+    if(moveSpawns&&p.list=="Encounter List")if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))
         for(auto& spawn:spawns->allStructs()) {
             const char* labels[]={"X","Y","Z"};const auto fields=fieldsOf(*spawn);
             for(std::size_t axis=0;axis<3;++axis)if(delta[axis]!=0)setField(*spawn,std::make_unique<neogff::GffFloatField>(labels[axis],scalar(fields,labels[axis])+delta[axis]));
@@ -1747,6 +1762,77 @@ void ModuleEditor::commitRoomMove(Vec3 position) {
     fields_->refreshActiveDocument();rebuildObjects();recordEdit("Move room");requestPreview();
 }
 
+void ModuleEditor::transformPlacement(const Placement& p,const neomdl::PlanarTransform& transform,Vec3 pivot) {
+    const auto position=transform.point(p.position,pivot);
+    translatePlacement(p,{position.x-p.position.x,position.y-p.position.y,position.z-p.position.z},false);
+    auto& resource=resources_.at(identityKeys_.at(p.identity));auto& root=*resource.model->gff().root();
+    auto& record=p.coordinates==Placement::Coordinates::Entry?root:*static_cast<neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    if(p.rotation==Placement::Rotation::Bearing) {
+        const auto direction=transform.direction({-std::sin(p.heading/kDegrees),std::cos(p.heading/kDegrees),0});
+        setField(record,std::make_unique<neogff::GffFloatField>("Bearing",std::atan2(-direction.x,direction.y)));
+    } else if(p.rotation==Placement::Rotation::Direction||p.rotation==Placement::Rotation::Entry) {
+        const auto x=p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_X":"XOrientation",y=p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_Y":"YOrientation";
+        const auto fields=fieldsOf(record);const auto direction=transform.direction({scalar(fields,x),scalar(fields,y),0});
+        setField(record,std::make_unique<neogff::GffFloatField>(x,direction.x));setField(record,std::make_unique<neogff::GffFloatField>(y,direction.y));
+    }
+    if(auto* geometry=static_cast<neogff::GffList*>(record.GetFieldByLabel("Geometry"))) {
+        const char* x=p.list=="TriggerList"?"PointX":"X",*y=p.list=="TriggerList"?"PointY":"Y",*z=p.list=="TriggerList"?"PointZ":"Z";
+        for(auto& vertex:geometry->allStructs()) {
+            const auto fields=fieldsOf(*vertex);const auto point=transform.direction({scalar(fields,x),scalar(fields,y),scalar(fields,z)});
+            setField(*vertex,std::make_unique<neogff::GffFloatField>(x,point.x));setField(*vertex,std::make_unique<neogff::GffFloatField>(y,point.y));
+        }
+        if(transform.mirrored)std::reverse(geometry->allStructs().begin(),geometry->allStructs().end());
+    }
+    if(p.list=="Encounter List")if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))for(auto& spawn:spawns->allStructs()) {
+        const auto fields=fieldsOf(*spawn);
+        const Vec3 original{scalar(fields,"X"),scalar(fields,"Y"),scalar(fields,"Z")};
+        const auto point=transform.point(original,pivot);
+        setField(*spawn,std::make_unique<neogff::GffFloatField>("X",point.x));setField(*spawn,std::make_unique<neogff::GffFloatField>("Y",point.y));
+        const auto angle=scalar(fields,"Orientation");const auto direction=transform.direction({std::sin(angle),std::cos(angle),0});
+        setField(*spawn,std::make_unique<neogff::GffFloatField>("Orientation",std::atan2(direction.x,direction.y)));
+    }
+    if(p.list=="CameraList") {
+        auto& orientation=static_cast<neogff::GffOrientationField&>(*record.GetFieldByLabel("Orientation"));
+        const auto q=transform.facing({orientation.value[1],orientation.value[2],orientation.value[3],orientation.value[0]});
+        setField(record,std::make_unique<neogff::GffOrientationField>("Orientation",q.w,q.x,q.y,q.z));
+    }
+}
+
+void ModuleEditor::transformRoom(const neomdl::PlanarTransform& transform,const std::string& action) {
+    const auto& scene=canvas_->areaScene();const auto& room=scene.rooms().at(std::size_t(roomChoice_->GetSelection()));
+    auto pivot=room.position;
+    if(roomPivot_->GetSelection()==1) {const auto bounds=selectedRoomBounds();pivot={(bounds.minimum.x+bounds.maximum.x)/2,(bounds.minimum.y+bounds.maximum.y)/2,(bounds.minimum.z+bounds.maximum.z)/2};}
+    const auto resolver=moduleResources();const auto name=neomdl::resourceKey(room.name);
+    std::vector<ResourceDocument> originals;auto models=neomdl::transformModelResources(name,name,resolver,transform,&originals);
+    std::map<Key,ResourceDocument> previous;for(auto& source:originals) {const auto key=resourceKey(source);previous.emplace(key,std::move(source));}
+    rememberSelection();
+    for(const auto& source:models) {
+        const auto key=resourceKey(source);
+        if(managedRoomResources_.insert(key).second) {
+            inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
+            if(const auto original=previous.find(key);original!=previous.end()) {
+                addedTemplates_.emplace(key,original->second);templateOrigins_.emplace(key,hostResources_);savedTemplateBytes_.emplace(key,std::make_shared<const std::vector<std::uint8_t>>(original->second.bytes));
+                for(auto& state:history_) {state.templates.emplace(key,original->second);state.origins.emplace(key,hostResources_);}
+            }
+        }
+    }
+    for(auto& source:models) {
+        const auto key=resourceKey(source);
+        addedTemplates_[key]=std::move(source);templateOrigins_[key]=hostResources_;
+    }
+    std::set<Key> changed;
+    if(moveRoomObjects_->GetValue()&&room.walkmesh&&scene.roomPositionQueriesAvailable())for(const auto& placement:placements_)
+        if(scene.findRoomAt(placement.position)==room.id) {transformPlacement(placement,transform,pivot);changed.insert(identityKeys_.at(placement.identity));}
+    const auto position=transform.point(room.position,pivot);auto& layout=addedTemplates_.at(resourceKey(scene.layoutSource()));
+    layout.bytes=neomdl::moveLayoutRoom(layout.bytes,std::size_t(roomChoice_->GetSelection()),position);
+    if(room.walkmesh) {
+        const Key key{name,kWok};auto& mesh=*walkmeshes_.at(name);neomdl::transformWalkmesh(mesh,transform,pivot);
+        addedTemplates_.at(key).bytes=neoshared::bwm::writeBwm(mesh);walkmeshSnapshots_[key]=std::make_shared<const std::vector<std::uint8_t>>(addedTemplates_.at(key).bytes);
+    }
+    for(const auto& key:changed)stage(resources_.at(key));
+    fields_->refreshActiveDocument();rebuildObjects();recordEdit(action);requestPreview();
+}
+
 void ModuleEditor::loadRoomData() {
     const auto& scene=canvas_->areaScene();
     const auto registerSource=[&](const ResourceDocument& source) {
@@ -1778,6 +1864,7 @@ void ModuleEditor::refreshRoomControls() {
     frameRoom_->Disable();frameEdge_->Disable();inspectNeighbor_->Disable();saveVisibility_->Enable(!canvas_->areaScene().empty());
     const auto& rooms=canvas_->areaScene().rooms();
     applyRoom_->Enable(!rooms.empty());moveRoom_->Disable();moveRoomObjects_->Disable();
+    for(auto* button:transformRoom_)button->Enable(!rooms.empty());
     if(rooms.empty()) {
         for(auto* field:roomPosition_)field->Clear();
         roomChoice_->Clear();canvas_->setRoomConnections({});roomEdgeInfo_->SetLabel("Load a 3D area to inspect its room connections.");configureRoomView();return;
@@ -1796,6 +1883,7 @@ void ModuleEditor::refreshRoomControls() {
     roomEdgeInfo_->SetLabel(wxui::toWx(source.walkmesh?std::to_string(roomConnections_.size())+" boundary edges; "+std::to_string(linked)+" authored room links.":"This room has no loaded WOK."));roomEdgeInfo_->Wrap(FromDIP(195));
     const bool canFrame=std::any_of(source.meshBounds.begin(),source.meshBounds.end(),[](const auto& box){return box.valid;});
     frameRoom_->Enable(canFrame);moveRoom_->Enable(canFrame);
+    roomPivot_->Enable(canFrame);if(!canFrame)roomPivot_->SetSelection(0);
     for(const auto& room:rooms)if(room.id!=source.id) {
         visibilityTargets_.push_back(room.id);const auto item=visibleRooms_->Append(wxui::toWx(room.name));
         visibleRooms_->Check(unsigned(item),std::find(source.influencingRooms.begin(),source.influencingRooms.end(),room.id)!=source.influencingRooms.end());
