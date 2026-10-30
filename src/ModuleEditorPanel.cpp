@@ -14,7 +14,6 @@
 #include <wx/choice.h>
 #include <wx/dirdlg.h>
 #include <wx/filedlg.h>
-#include <wx/filename.h>
 #include <wx/listbox.h>
 #include <wx/notebook.h>
 #include <wx/progdlg.h>
@@ -210,8 +209,7 @@ public:
         outer_->SetMinimumPaneSize(FromDIP(190));outer_->SplitVertically(inspector,split_,FromDIP(240));
         root->Add(outer_,1,wxEXPAND);
         SetSizer(root);createModuleStatusBar(1);
-        const auto temp=wxFileName::CreateTempFileName("NeoToolKit-module");
-        staging_=neosettings::pathFromWx(temp);std::filesystem::remove(staging_);std::filesystem::create_directory(staging_);
+        staging_=neoshared::erf::make_unique_temp_directory(std::filesystem::temp_directory_path(),"NeoToolKit-module");
         neomdl::ui::RenderOptions options;options.previewTriggers=true;
         canvas_->setOptions(options);
         buildMenus();
