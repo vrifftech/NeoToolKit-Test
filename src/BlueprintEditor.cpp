@@ -24,9 +24,14 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     :wxDialog(parent,wxID_ANY,"Blueprint",wxDefaultPosition,parent->FromDIP(wxSize(1120,720)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER),actions_(std::move(actions)) {
     auto* box=new wxBoxSizer(wxVERTICAL);source_=new wxStaticText(this,wxID_ANY,{});box->Add(source_,0,wxEXPAND|wxALL,8);
     auto* tools=new wxWrapSizer(wxHORIZONTAL);
-    const std::vector<std::pair<const char*,std::function<void()>>> commands={{"All fields",[this]{Hide();actions_.fields();}},
-        {"Undo",actions_.undo},{"Redo",actions_.redo},{"Save resources...",actions_.save},{"Package MOD...",actions_.package}};
-    for(const auto& [name,action]:commands) {auto* button=new wxButton(this,wxID_ANY,name);if(std::string(name)=="Undo")undo_=button;if(std::string(name)=="Redo")redo_=button;tools->Add(button,0,wxALL,3);button->Bind(wxEVT_BUTTON,[this,action](wxCommandEvent&){try {action();}catch(const std::exception& e){wxui::showError(this,e);}});}
+    const auto command=[&](const char* label,std::function<void()> action) {
+        auto* button=new wxButton(this,wxID_ANY,label);tools->Add(button,0,wxALL,3);
+        button->Bind(wxEVT_BUTTON,[this,action=std::move(action)](wxCommandEvent&){try {action();}catch(const std::exception& e){wxui::showError(this,e);}});
+        return button;
+    };
+    command("All fields",[this]{Hide();actions_.fields();});
+    undo_=command("Undo",actions_.undo);redo_=command("Redo",actions_.redo);
+    command("Save resources...",actions_.save);command("Package MOD...",actions_.package);
     box->Add(tools,0,wxEXPAND|wxLEFT|wxRIGHT,5);
     auto* split=split_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);auto* tabs=new wxNotebook(split,wxID_ANY);
     properties_=new wxScrolledWindow(tabs);properties_->SetScrollRate(0,FromDIP(12));tabs->AddPage(properties_,"Properties / scripts");

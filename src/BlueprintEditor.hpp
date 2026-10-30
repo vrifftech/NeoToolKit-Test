@@ -11,7 +11,6 @@ class wxCheckBox;
 class wxTextCtrl;
 class wxComboBox;
 class wxStaticText;
-class wxSimplebook;
 class wxScrolledWindow;
 class wxSplitterWindow;
 
