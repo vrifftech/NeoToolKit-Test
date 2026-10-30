@@ -21,7 +21,7 @@ class BlueprintEditor final : public wxDialog {
 public:
     enum class StockAction {Duplicate,Remove,Infinite};
     struct Actions {
-        std::function<void(const std::string&,const std::string&,const std::string&,const std::string&)> edit;
+        std::function<void(const std::string&,const std::string&,const std::string&)> edit;
         std::function<void(neoshared::ResourceDocument,const neomdl::ResourceResolver&)> addItem;
         std::function<void(StockAction,std::size_t,bool)> stock;
         std::function<void(const std::string&,std::uint16_t)> itemFields;
@@ -37,7 +37,7 @@ public:
     void selectInventory(std::size_t index);
 private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
-    struct Row {std::string field,type,label;Kind kind;wxWindow* control;};
+    struct Row {std::string field,label;Kind kind;wxWindow* control;};
     void buildProperties(std::uint16_t type,bool k2);
     void commit(std::size_t index);
     void selectStock(int index);

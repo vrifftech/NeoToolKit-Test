@@ -774,7 +774,7 @@ void ModuleEditor::editBlueprint() {
     auto& resource=openBlueprintResource(resolver(name,kind.type).value(),resolver);blueprintKey_=resourceKey(resource.source);
     if(!blueprintEditor_) {
         BlueprintEditor::Actions actions;
-        actions.edit=[this](const std::string& path,const std::string&,const std::string& value,const std::string& label){
+        actions.edit=[this](const std::string& path,const std::string& value,const std::string& label){
             rememberSelection();auto& resource=resources_.at(blueprintKey_);
             resource.model->setValue(path,value);stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);
             recordEdit("Edit blueprint "+label);requestPreview();

@@ -59,7 +59,7 @@ void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
     for(auto& r:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(r.control))text->DiscardEdits();
     rows_.clear();properties_->DestroyChildren();
     auto* box=new wxBoxSizer(wxVERTICAL);properties_->SetSizer(box);
-    const auto add=[&](std::string field,std::string native,std::string label,Kind kind=Kind::Value) {
+    const auto add=[&](std::string field,std::string label,Kind kind=Kind::Value) {
         const auto index=rows_.size();field=field.substr(0,16);wxWindow* control;
         if(kind==Kind::Flag) {auto* check=new wxCheckBox(properties_,wxID_ANY,wxui::toWx(label));control=check;box->Add(check,0,wxEXPAND|wxALL,5);check->Bind(wxEVT_CHECKBOX,[this,index](wxCommandEvent&){commit(index);});}
         else {box->Add(new wxStaticText(properties_,wxID_ANY,wxui::toWx(label)),0,wxLEFT|wxRIGHT|wxTOP,5);
@@ -67,29 +67,29 @@ void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
             else {auto* text=new wxTextCtrl(properties_,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxTE_PROCESS_ENTER);control=text;text->Bind(wxEVT_TEXT_ENTER,[this,index](wxCommandEvent&){commit(index);});text->Bind(wxEVT_KILL_FOCUS,[this,index,text](wxFocusEvent& e){if(text->IsModified())commit(index);e.Skip();});}
             box->Add(control,0,wxEXPAND|wxALL,5);
         }
-        rows_.push_back({std::move(field),std::move(native),std::move(label),kind,control});
+        rows_.push_back({std::move(field),std::move(label),kind,control});
         if(rows_.back().field=="MarkUp"||rows_.back().field=="MarkDown")control->SetToolTip("Percentage of item cost: 100 means the item cost before trading modifiers.");
     };
-    const auto loc=[&](const std::string& field,const std::string& label){add(field,"CExoLocString",label+" — embedded English",Kind::LocalizedText);add(field,"CExoLocString",label+" — TLK reference (-1 = none)",Kind::LocalizedRef);};
-    add("Tag","CExoString","Tag");
-    if(type==2027) {loc("FirstName","First name");loc("LastName","Last name");add("Appearance_Type","WORD","Appearance row");add("Gender","BYTE","Gender");add("Race","BYTE","Race");add("GoodEvil","BYTE","Alignment");}
+    const auto loc=[&](const std::string& field,const std::string& label){add(field,label+" — embedded English",Kind::LocalizedText);add(field,label+" — TLK reference (-1 = none)",Kind::LocalizedRef);};
+    add("Tag","Tag");
+    if(type==2027) {loc("FirstName","First name");loc("LastName","Last name");add("Appearance_Type","Appearance row");add("Gender","Gender");add("Race","Race");add("GoodEvil","Alignment");}
     else if(type==2032||type==2025)loc("LocalizedName","Name");
     else if(type==2042||type==2044||type==2051)loc("LocName","Name");
     if(type==2042||type==2044) {
-        loc("Description","Description");add("Appearance","DWORD","Appearance row");add("Plot","BYTE","Plot",Kind::Flag);add("Static","BYTE","Static",Kind::Flag);add("Min1HP","BYTE","Cannot fall below 1 HP",Kind::Flag);add("HP","SHORT","Maximum hit points");add("CurrentHP","SHORT","Current hit points");
-        add("Locked","BYTE","Locked",Kind::Flag);add("KeyRequired","BYTE","Requires a key",Kind::Flag);add("KeyName","CExoString","Key tag");add("OpenLockDC","BYTE","Open lock difficulty");add("CloseLockDC","BYTE","Close lock difficulty");
-        if(type==2044) {add("Useable","BYTE","Usable",Kind::Flag);add("Open","BYTE","Open",Kind::Flag);add("AnimationState","BYTE","Animation state");}
-        else {add("GenericType","BYTE","Door type row");add("OpenState","BYTE","Open state");}
+        loc("Description","Description");add("Appearance","Appearance row");add("Plot","Plot",Kind::Flag);add("Static","Static",Kind::Flag);add("Min1HP","Cannot fall below 1 HP",Kind::Flag);add("HP","Maximum hit points");add("CurrentHP","Current hit points");
+        add("Locked","Locked",Kind::Flag);add("KeyRequired","Requires a key",Kind::Flag);add("KeyName","Key tag");add("OpenLockDC","Open lock difficulty");add("CloseLockDC","Close lock difficulty");
+        if(type==2044) {add("Useable","Usable",Kind::Flag);add("Open","Open",Kind::Flag);add("AnimationState","Animation state");}
+        else {add("GenericType","Door type row");add("OpenState","Open state");}
     }
-    if(type==2032||type==2042||type==2044) {add("TrapDetectable","BYTE","Trap detectable",Kind::Flag);add("TrapDisarmable","BYTE","Trap disarmable",Kind::Flag);add("TrapOneShot","BYTE","One-shot trap",Kind::Flag);add("TrapType","BYTE","Trap type");}
-    if(type==2032)add("Type","INT","Trigger type");
+    if(type==2032||type==2042||type==2044) {add("TrapDetectable","Trap detectable",Kind::Flag);add("TrapDisarmable","Trap disarmable",Kind::Flag);add("TrapOneShot","One-shot trap",Kind::Flag);add("TrapType","Trap type");}
+    if(type==2032)add("Type","Trigger type");
     if(type==2035) {
-        for(const auto* key:{"Active","Positional","Looping","Random","RandomPosition"})add(key,"BYTE",key,Kind::Flag);
-        add("Volume","BYTE","Volume");add("VolumeVrtn","BYTE","Volume variation");add("MinDistance","FLOAT","Minimum distance");add("MaxDistance","FLOAT","Maximum distance");add("Interval","DWORD","Interval");add("IntervalVrtn","DWORD","Interval variation");add("PitchVariation","FLOAT","Pitch variation");add("RandomRangeX","FLOAT","Random range X");add("RandomRangeY","FLOAT","Random range Y");
+        for(const auto* key:{"Active","Positional","Looping","Random","RandomPosition"})add(key,key,Kind::Flag);
+        add("Volume","Volume");add("VolumeVrtn","Volume variation");add("MinDistance","Minimum distance");add("MaxDistance","Maximum distance");add("Interval","Interval");add("IntervalVrtn","Interval variation");add("PitchVariation","Pitch variation");add("RandomRangeX","Random range X");add("RandomRangeY","Random range Y");
     }
-    if(type==2051) {add("BuySellFlag","BYTE","Shop pages",Kind::StoreMode);add("MarkUp","INT","Buy markup (%)");add("MarkDown","INT","Sell markdown (%)");}
-    if(type==2025) {loc("Description","Unidentified description");loc("DescIdentified","Identified description");add("BaseItem","INT","Base item row");add("StackSize","WORD","Stack size");add("ModelVariation","BYTE","Model variation");add("TextureVar","BYTE","Texture variation");add("AddCost","DWORD","Additional cost");add("Plot","BYTE","Plot",Kind::Flag);}
-    if(type==2027||type==2042||type==2044)add("Conversation","ResRef","Conversation");
+    if(type==2051) {add("BuySellFlag","Shop pages",Kind::StoreMode);add("MarkUp","Buy markup (%)");add("MarkDown","Sell markdown (%)");}
+    if(type==2025) {loc("Description","Unidentified description");loc("DescIdentified","Identified description");add("BaseItem","Base item row");add("StackSize","Stack size");add("ModelVariation","Model variation");add("TextureVar","Texture variation");add("AddCost","Additional cost");add("Plot","Plot",Kind::Flag);}
+    if(type==2027||type==2042||type==2044)add("Conversation","Conversation");
     std::vector<std::string> scripts;
     if(type==2027)scripts={"ScriptHeartbeat","ScriptOnNotice","ScriptSpellAt","ScriptAttacked","ScriptDamaged","ScriptDisturbed","ScriptEndRound","ScriptDialogue","ScriptSpawn","ScriptRested","ScriptDeath","ScriptUserDefine","ScriptOnBlocked","ScriptEndDialogue"};
     if(type==2042||type==2044)scripts={"OnClosed","OnDamaged","OnDeath","OnDisarm","OnHeartbeat","OnLock","OnMeleeAttacked","OnOpen","OnSpellCastAt","OnUnlock","OnUserDefined","OnDialog","OnTrapTriggered"};
@@ -98,7 +98,7 @@ void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
     if(type==2044) {scripts.push_back("OnInvDisturbed");scripts.push_back("OnUsed");scripts.push_back("OnEndDialogue");}
     if(type==2032)scripts={"ScriptHeartbeat","ScriptOnEnter","ScriptOnExit","ScriptUserDefine","OnTrapTriggered","OnDisarm","OnClick"};
     if(type==2051)scripts={"OnOpenStore"};
-    for(const auto& name:scripts)add(name,"ResRef",name);
+    for(const auto& name:scripts)add(name,name);
     auto* note=new wxStaticText(properties_,wxID_ANY,"Only fields present in the template are enabled. Other fields and translations are available through All fields. For placeables, Open and saved Animation take precedence over AnimationState.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);properties_->FitInside();
 }
 void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
@@ -140,7 +140,7 @@ void BlueprintEditor::commit(std::size_t index) {
         else {auto* text=static_cast<wxTextCtrl*>(row.control);text->DiscardEdits();value=wxui::toStd(text->GetValue());
             if(row.kind==Kind::LocalizedRef)path+="(strref)";else if(row.kind==Kind::LocalizedText)path+="(lang"+std::to_string(englishId(static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(row.field))))+")";
         }
-        actions_.edit(path,row.type,value,row.label);
+        actions_.edit(path,value,row.label);
     } catch(const std::exception& e){wxui::showError(this,e);}
 }
 void BlueprintEditor::selectStock(int index) {
