@@ -36,6 +36,7 @@ using neoshared::ResourceDocument;
 using neomdl::model::Vec3;
 using Clock=std::chrono::steady_clock;
 using Key=std::pair<std::string,std::uint16_t>;
+using ByteSnapshot=std::shared_ptr<const std::vector<std::uint8_t>>;
 constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
@@ -63,6 +64,7 @@ void setField(neogff::GffStruct& record,std::unique_ptr<neogff::GffField> value)
 struct Resource {
     ResourceDocument source;
     neogff::GffModel* model{};
+    ByteSnapshot snapshot=std::make_shared<const std::vector<std::uint8_t>>(source.bytes);
 };
 struct Placement {
     std::string identity,path,list,label;
@@ -77,7 +79,7 @@ struct Preview {
     std::shared_ptr<neomdl::GameResourceSession> session;
 };
 struct EditState {
-    std::map<Key,std::vector<std::uint8_t>> bytes;
+    std::map<Key,ByteSnapshot> bytes;
     std::map<Key,ResourceDocument> templates;
     std::map<std::string,std::string> imports;
     std::map<Key,neomdl::ResourceResolver> origins;
@@ -323,7 +325,8 @@ public:
                 if(!catalog->openFiles(path.parent_path(),{path}))throw std::runtime_error(catalog->lastError());
                 for(const auto& entry:catalog->resources())if(editableResource(entry.type)) {
                     auto source=readArchiveResource(*catalog,entry);
-                    resources.emplace(resourceKey(source),Resource{std::move(source),{}});
+                    const auto key=resourceKey(source);
+                    resources.emplace(key,Resource{std::move(source),{}});
                 }
             } else {
                 for(const auto& entry:std::filesystem::directory_iterator(path.parent_path())) {
@@ -333,7 +336,8 @@ public:
                     ResourceDocument source{neomdl::resourceFileIdentity(entry.path()),
                         neoshared::pathToUtf8(entry.path().filename()),neoshared::pathToUtf8(entry.path()),*type,
                         neomdl::readResourceFile(entry.path()),{entry.path()}};
-                    resources.emplace(resourceKey(source),Resource{std::move(source),{}});
+                    const auto key=resourceKey(source);
+                    resources.emplace(key,Resource{std::move(source),{}});
                 }
             }
             if(resources.empty())throw std::runtime_error("This module contains no GIT, ARE or IFO resources.");
@@ -468,7 +472,7 @@ private:
         sourceTitle_=title;
         history_.clear();historyIndex_=0;
         savedBytes_.clear();savedTemplateKeys_.clear();
-        for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.source.bytes);
+        for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.snapshot);
         rebuildObjects();activateAreaResource();selecting_=false;
         history_.push_back(captureEdit());refreshAreaControls();setAppearance(dark_,scale_);updateActions();
         setModuleStatusText("Module loaded. Edit a field or choose Game resources to load the 3D view.");
@@ -480,7 +484,11 @@ private:
         if(found!=resources_.end())fields_->activateResource(found->second.source.identity);
     }
     void stage(Resource& resource) {
-        resource.source.bytes=resource.model->gff().SaveBytes();
+        auto bytes=resource.model->gff().SaveBytes();
+        if(bytes!=resource.source.bytes) {
+            resource.source.bytes=std::move(bytes);
+            resource.snapshot=std::make_shared<const std::vector<std::uint8_t>>(resource.source.bytes);
+        }
         if(!editableResource(resource.source.type))addedTemplates_[resourceKey(resource.source)]=resource.source;
     }
     bool dirty() const {
@@ -559,7 +567,7 @@ private:
     bool blueprintChanged(const EditState& state) const;
     bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
-        for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.source.bytes;
+        for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.snapshot;
         savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
         updateDirty();
         fields_->refreshActiveDocument();updateActions();
@@ -677,7 +685,7 @@ private:
     std::map<std::string,ModulePackageInput> inlineSources_;
     bool templatesDirty_{};
     std::vector<EditState> history_;std::size_t historyIndex_{};
-    std::map<Key,std::vector<std::uint8_t>> savedBytes_;
+    std::map<Key,ByteSnapshot> savedBytes_;
     std::set<Key> savedTemplateKeys_;
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
@@ -747,10 +755,11 @@ neomdl::ResourceResolver ModuleEditor::moduleResources() const {
 Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver) {
     const auto key=resourceKey(source);auto found=resources_.find(key);
     if(found!=resources_.end()) {fields_->activateResource(found->second.source.identity);return found->second;}
-    for(auto& state:history_) {state.bytes.emplace(key,source.bytes);state.origins.emplace(key,resolver);}
-    templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,source.bytes);identityKeys_[source.identity]=key;
+    const auto snapshot=std::make_shared<const std::vector<std::uint8_t>>(source.bytes);
+    for(auto& state:history_) {state.bytes.emplace(key,snapshot);state.origins.emplace(key,resolver);}
+    templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,snapshot);identityKeys_[source.identity]=key;
     inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
-    fields_->openResource(source);auto& resource=resources_.emplace(key,Resource{std::move(source),fields_->activeModel()}).first->second;
+    fields_->openResource(source);auto& resource=resources_.emplace(key,Resource{std::move(source),fields_->activeModel(),snapshot}).first->second;
     return resource;
 }
 
@@ -797,13 +806,13 @@ void ModuleEditor::refreshBlueprintEditor() {
 
 bool ModuleEditor::blueprintChanged(const EditState& state) const {
     return blueprintEditor_&&blueprintEditor_->IsShown()&&std::any_of(resources_.begin(),resources_.end(),[&](const auto& entry){
-        return (entry.first==blueprintKey_||entry.first.second==2025)&&entry.second.source.bytes!=state.bytes.at(entry.first);
+        return (entry.first==blueprintKey_||entry.first.second==2025)&&entry.second.source.bytes!=*state.bytes.at(entry.first);
     });
 }
 
 EditState ModuleEditor::captureEdit(const std::string& action) const {
     EditState state;
-    for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.source.bytes);
+    for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.snapshot);
     state.templates=addedTemplates_;state.imports=importedTemplates_;
     state.origins=templateOrigins_;
     state.inlineSources=inlineSources_;
@@ -837,7 +846,7 @@ void ModuleEditor::rememberSelection() {
 }
 
 void ModuleEditor::updateDirty() {
-    for(auto& [key,resource]:resources_)resource.model->gff().dirty(resource.source.bytes!=savedBytes_.at(key));
+    for(auto& [key,resource]:resources_)resource.model->gff().dirty(resource.source.bytes!=*savedBytes_.at(key));
     std::set<Key> keys;for(const auto& [key,source]:addedTemplates_)keys.insert(key);
     templatesDirty_=keys!=savedTemplateKeys_;
 }
@@ -860,12 +869,12 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     const bool blueprint=blueprintChanged(state);
     selecting_=true;
     for(auto& [key,resource]:resources_) {
-        if(resource.source.bytes!=state.bytes.at(key)) {
-            resource.source.bytes=state.bytes.at(key);
+        if(resource.source.bytes!=*state.bytes.at(key)) {
+            resource.source.bytes=*state.bytes.at(key);
             resource.model->gff().LoadBytes(resource.source.bytes);
         }
+        resource.snapshot=state.bytes.at(key);
     }
-    refreshAreaControls();
     addedTemplates_=state.templates;importedTemplates_=state.imports;
     templateOrigins_=state.origins;
     inlineSources_=state.inlineSources;
