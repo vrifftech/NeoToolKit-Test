@@ -45,7 +45,7 @@ void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
     }
 }
 }
-std::vector<neomodules::Panel*> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_};}
+std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -151,7 +151,6 @@ void WorkspaceFrame::buildMenus() {
     workspace->AppendSeparator();workspace->Append(ID_About,"About NeoToolKit Test");
     bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;
     bar->Enable(ID_ToggleExplorer,false);
-    for(std::size_t i=0;i<kEditorCount;++i)if(panels()[i])captureEditorMenus(i);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",

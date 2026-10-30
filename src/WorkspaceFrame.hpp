@@ -24,19 +24,8 @@ public:
     ~WorkspaceFrame() override;
     void openPath(const std::filesystem::path& path, const std::string& editor={});
     bool openResource(neoshared::ResourceDocument resource, const std::string& editor={});
-    neobif::ui::BrowserPanel& browser() {return *browser_;}
-    neo2da::ui::EditorPanel& tables() {ensureEditor(EditorKind::Tables);return *tables_;}
-    neossf::ui::SSFEditorPanel& soundsets() {ensureEditor(EditorKind::Soundsets);return *soundsets_;}
-    neotlk::ui::TLKEditorPanel& talkTables() {ensureEditor(EditorKind::TalkTables);return *talkTables_;}
-    neogff::ui::GFFEditorPanel& structured() {ensureEditor(EditorKind::Gff);return *structured_;}
-    neodlg::ui::DLGEditorPanel& dialogues() {ensureEditor(EditorKind::Dialogues);return *dialogues_;}
-    neojrl::ui::JRLEditorPanel& journals() {ensureEditor(EditorKind::Journals);return *journals_;}
-    neomdl::ui::ModelEditorPanel& models() {ensureEditor(EditorKind::Models);return *models_;}
-    neotpc::ui::TextureEditorPanel& textures() {ensureEditor(EditorKind::Textures);return *textures_;}
-    neoerf::ui::ERFEditorPanel& archives() {ensureEditor(EditorKind::Archives);return *archives_;}
-    std::size_t activeEditorIndex() const {return activeEditor_;}
-    void selectEditor(std::size_t index);
 private:
+    void selectEditor(std::size_t index);
     bool openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession);
     struct Menu {wxString title;std::unique_ptr<wxMenu> menu;};
     void buildMenus();
@@ -55,7 +44,7 @@ private:
     void applyAppearance();
     void checkOutputs(const std::vector<std::filesystem::path>& paths,const neomodules::Panel* owner,
                      const std::vector<std::filesystem::path>& localInputs) const;
-    std::vector<neomodules::Panel*> panels() const;
+    std::array<neomodules::Panel*,kEditorCount> panels() const;
     neobif::ui::BrowserPanel* browser_{};
     neo2da::ui::EditorPanel* tables_{};
     neossf::ui::SSFEditorPanel* soundsets_{};
