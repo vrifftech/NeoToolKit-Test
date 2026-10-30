@@ -9,6 +9,7 @@
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
 #include "core/Engine2DA.hpp"
+#include "core/RoomEditing.hpp"
 #include <twoda/TwoDAFile.hpp>
 #include "NeoViewState.hpp"
 #include <neoshared/bif/LooseArchiveCatalog.hpp>
@@ -193,7 +194,7 @@ public:
         walkmeshBox->Add(new wxStaticText(walkmeshPage_,wxID_ANY,"Room"),0,wxALL,5);
         walkmeshRooms_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshRooms_->Append("All rooms");walkmeshRooms_->SetSelection(0);
         walkmeshBox->Add(walkmeshRooms_,0,wxEXPAND|wxALL,5);
-        walkmeshTool_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshTool_->Append("Select faces");walkmeshTool_->Append("Paint faces");walkmeshTool_->SetSelection(0);
+        walkmeshTool_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshTool_->Append("Select faces");walkmeshTool_->Append("Paint faces");walkmeshTool_->Append("Move vertices");walkmeshTool_->SetSelection(0);
         walkmeshBox->Add(walkmeshTool_,0,wxEXPAND|wxALL,5);
         walkmeshBox->Add(new wxStaticText(walkmeshPage_,wxID_ANY,"Paint material"),0,wxALL,5);
         walkmeshMaterial_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshBox->Add(walkmeshMaterial_,0,wxEXPAND|wxALL,5);
@@ -204,16 +205,29 @@ public:
         applyWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Apply to selected");selectionTools->Add(applyWalkmesh_,0,wxALL,3);
         sameWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Select matching");selectionTools->Add(sameWalkmesh_,0,wxALL,3);
         auto* clearFaces=new wxButton(walkmeshPage_,wxID_ANY,"Clear selection");selectionTools->Add(clearFaces,0,wxALL,3);
+        faceVertices_=new wxButton(walkmeshPage_,wxID_ANY,"Vertices of selected faces");selectionTools->Add(faceVertices_,0,wxALL,3);
         walkmeshBox->Add(selectionTools,0,wxEXPAND);saveWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Save WOK...");walkmeshBox->Add(saveWalkmesh_,0,wxEXPAND|wxALL,5);
+        walkmeshBox->Add(new wxStaticText(walkmeshPage_,wxID_ANY,"Selected vertex center (world XYZ)"),0,wxALL,5);
+        auto* vertexFields=new wxFlexGridSizer(2,4,6);vertexFields->AddGrowableCol(1);
+        const char* axisNames[]={"X","Y","Z"};
+        for(std::size_t i=0;i<3;++i) {vertexFields->Add(new wxStaticText(walkmeshPage_,wxID_ANY,axisNames[i]),0,wxALIGN_CENTER_VERTICAL);vertexPosition_[i]=new wxTextCtrl(walkmeshPage_,wxID_ANY);vertexFields->Add(vertexPosition_[i],1,wxEXPAND);}
+        walkmeshBox->Add(vertexFields,0,wxEXPAND|wxALL,5);applyVertices_=new wxButton(walkmeshPage_,wxID_ANY,"Apply vertex position");walkmeshBox->Add(applyVertices_,0,wxEXPAND|wxALL,5);
         walkmeshInfo_=new wxStaticText(walkmeshPage_,wxID_ANY,"Load a 3D area to edit its walkmeshes.");walkmeshInfo_->Wrap(FromDIP(195));walkmeshBox->Add(walkmeshInfo_,0,wxEXPAND|wxALL,5);
         auto* walkmeshHelp=new wxStaticText(walkmeshPage_,wxID_ANY,
-            "Click to select; Shift-click toggles. Drag a box to select face centers through geometry. Paint mode paints faces under the cursor. Alt-drag orbits, right-drag pans; Esc cancels a stroke.\n\nChoose a room for Save WOK. Save resources and Package MOD include all loaded walkmeshes.");
+            "Click or box-select faces/vertices; Shift adds or toggles. Paint mode paints faces under the cursor. Move vertices uses the XYZ gizmo or center fields. Grid snapping applies. Alt-drag orbits, right-drag pans; Esc cancels.\n\nChoose a room for Save WOK. Save resources and Package MOD include all loaded walkmeshes.");
         walkmeshHelp->Wrap(FromDIP(195));walkmeshBox->Add(walkmeshHelp,0,wxEXPAND|wxALL,5);walkmeshPage_->SetSizer(walkmeshBox);objectTabs_->AddPage(walkmeshPage_,"Walkmesh");
         roomsPage_=new wxScrolledWindow(objectTabs_);roomsPage_->SetScrollRate(0,FromDIP(10));auto* roomsBox=new wxBoxSizer(wxVERTICAL);
         roomsBox->Add(new wxStaticText(roomsPage_,wxID_ANY,"Room (LYT index and name)"),0,wxALL,5);
         roomChoice_=new wxChoice(roomsPage_,wxID_ANY);roomsBox->Add(roomChoice_,0,wxEXPAND|wxALL,5);
         previewVisibility_=new wxCheckBox(roomsPage_,wxID_ANY,"Preview visibility from this room");roomsBox->Add(previewVisibility_,0,wxALL,5);
         frameRoom_=new wxButton(roomsPage_,wxID_ANY,"Frame room");roomsBox->Add(frameRoom_,0,wxEXPAND|wxALL,5);
+        moveRoom_=new wxCheckBox(roomsPage_,wxID_ANY,"Move room with gizmo");roomsBox->Add(moveRoom_,0,wxALL,5);
+        auto* roomFields=new wxFlexGridSizer(2,4,6);roomFields->AddGrowableCol(1);
+        for(std::size_t i=0;i<3;++i) {roomFields->Add(new wxStaticText(roomsPage_,wxID_ANY,wxString("LYT ")+axisNames[i]),0,wxALIGN_CENTER_VERTICAL);roomPosition_[i]=new wxTextCtrl(roomsPage_,wxID_ANY);roomFields->Add(roomPosition_[i],1,wxEXPAND);}
+        roomsBox->Add(roomFields,0,wxEXPAND|wxALL,5);
+        moveRoomObjects_=new wxCheckBox(roomsPage_,wxID_ANY,"Move contained objects and entry point");moveRoomObjects_->SetValue(true);roomsBox->Add(moveRoomObjects_,0,wxALL,5);
+        applyRoom_=new wxButton(roomsPage_,wxID_ANY,"Apply room position");roomsBox->Add(applyRoom_,0,wxEXPAND|wxALL,5);
+        auto* saveRoom=new wxButton(roomsPage_,wxID_ANY,"Save room edits...");roomsBox->Add(saveRoom,0,wxEXPAND|wxALL,5);
         roomsBox->Add(new wxStaticText(roomsPage_,wxID_ANY,"WOK boundary connections"),0,wxALL,5);
         roomEdges_=new wxListCtrl(roomsPage_,wxID_ANY,wxDefaultPosition,FromDIP(wxSize(-1,170)),wxLC_REPORT|wxLC_SINGLE_SEL);
         roomEdges_->InsertColumn(0,"Face/edge",wxLIST_FORMAT_LEFT,FromDIP(65));roomEdges_->InsertColumn(1,"Target",wxLIST_FORMAT_LEFT,FromDIP(110));roomEdges_->InsertColumn(2,"State",wxLIST_FORMAT_LEFT,FromDIP(100));
@@ -226,7 +240,7 @@ public:
         visibleRooms_=new wxCheckListBox(roomsPage_,wxID_ANY,wxDefaultPosition,FromDIP(wxSize(-1,160)));roomsBox->Add(visibleRooms_,0,wxEXPAND|wxALL,5);
         visibilityInfo_=new wxStaticText(roomsPage_,wxID_ANY,"Load a 3D area to edit room visibility.");visibilityInfo_->Wrap(FromDIP(195));roomsBox->Add(visibilityInfo_,0,wxEXPAND|wxALL,5);
         saveVisibility_=new wxButton(roomsPage_,wxID_ANY,"Save VIS...");roomsBox->Add(saveVisibility_,0,wxEXPAND|wxALL,5);
-        auto* roomHelp=new wxStaticText(roomsPage_,wxID_ANY,"Click an edge to inspect it; drag to orbit. Double-click a connection to inspect its neighbor.\n\nGray: boundary. Green: aligned return link. Amber: gap or missing return link. Red: target unavailable. Yellow: selected edge; cyan: closest target edge.\n\nVIS checks apply to both rooms. Save resources and Package MOD include VIS edits.");
+        auto* roomHelp=new wxStaticText(roomsPage_,wxID_ANY,"Move rooms with XYZ fields or the gizmo. Contained objects are identified from the room walkmesh. Save room edits exports the coordinated resources. Room indices, connections and VIS membership are retained; inspect gaps after moving.\n\nClick an edge to inspect it; drag to orbit. Double-click a connection to inspect its neighbor.\n\nGray: boundary. Green: aligned return link. Amber: gap or missing return link. Red: target unavailable. Yellow: selected edge; cyan: closest target edge.\n\nVIS checks apply to both rooms. Save resources and Package MOD include room and VIS edits.");
         roomHelp->Wrap(FromDIP(195));roomsBox->Add(roomHelp,0,wxEXPAND|wxALL,5);roomsPage_->SetSizer(roomsBox);objectTabs_->AddPage(roomsPage_,"Rooms / VIS");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
@@ -290,19 +304,22 @@ public:
             placingArrival_=false;
             canvas_->cancelAreaPolygon();canvas_->cancelAreaGizmo();palette_->stopPlacing();updateActions();
         });
-        const auto snapping=[this](wxCommandEvent&){
-            const float grids[]={0,0.1f,0.25f,0.5f,1,2},angles[]={0,5,15,30,45,90};
-            canvas_->setAreaSnapping({grids[gridSnap_->GetSelection()],angles[rotationSnap_->GetSelection()],walkmeshSnap_->GetValue()});
-        };
+        const auto snapping=[this](wxCommandEvent&){updateSnapping();};
         gridSnap_->Bind(wxEVT_CHOICE,snapping);rotationSnap_->Bind(wxEVT_CHOICE,snapping);walkmeshSnap_->Bind(wxEVT_CHECKBOX,snapping);
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
             if(event.GetSelection()!=1)palette_->stopPlacing();
             if(objectTabs_->GetCurrentPage()==walkmeshPage_||objectTabs_->GetCurrentPage()==roomsPage_)cameraControls_->stopPreview();
-            placingArrival_=false;canvas_->cancelWalkmeshStroke();configureWalkmesh();updateActions();
+            placingArrival_=false;canvas_->cancelAreaGizmo();canvas_->cancelWalkmeshStroke();configureWalkmesh();updateSnapping();updateActions();
             if(objectTabs_->GetCurrentPage()==roomsPage_)refreshRoomControls();
             event.Skip();
         });
-        roomChoice_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){refreshRoomControls();});
+        roomChoice_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){canvas_->cancelAreaGizmo();refreshRoomControls();updateActions();});
+        moveRoom_->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){canvas_->cancelAreaGizmo();updateSnapping();updateActions();});
+        applyRoom_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {
+            const Vec3 position{neogff::ParseFloatDecimal(wxui::toStd(roomPosition_[0]->GetValue())),neogff::ParseFloatDecimal(wxui::toStd(roomPosition_[1]->GetValue())),neogff::ParseFloatDecimal(wxui::toStd(roomPosition_[2]->GetValue()))};
+            commitRoomMove(position);
+        }catch(const std::exception& e){wxui::showError(this,e);}});
+        saveRoom->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {saveResources();}catch(const std::exception& e){wxui::showError(this,e);}});
         previewVisibility_->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){configureRoomView();});
         xrayConnections_->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){configureRoomView();});
         roomEdges_->Bind(wxEVT_LIST_ITEM_SELECTED,[this](wxListEvent& event){selectRoomEdge(std::size_t(event.GetIndex()));});
@@ -325,9 +342,9 @@ public:
             catch(const std::exception& e){refreshRoomControls();wxui::showError(this,e);}
         });
         saveVisibility_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {saveVisibility();}catch(const std::exception& e){wxui::showError(this,e);}});
-        const auto walkmeshOptions=[this](wxCommandEvent&){configureWalkmesh();refreshWalkmeshInfo();};
+        const auto walkmeshOptions=[this](wxCommandEvent&){canvas_->cancelAreaGizmo();configureWalkmesh();updateSnapping();updateActions();};
         showWalkmesh_->Bind(wxEVT_CHECKBOX,walkmeshOptions);xrayWalkmesh_->Bind(wxEVT_CHECKBOX,walkmeshOptions);
-        walkmeshRooms_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){canvas_->setWalkmeshSelection({});configureWalkmesh();refreshWalkmeshInfo();});
+        walkmeshRooms_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){canvas_->cancelAreaGizmo();canvas_->setWalkmeshSelection({});canvas_->setWalkmeshVertices({});configureWalkmesh();updateActions();});
         walkmeshTool_->Bind(wxEVT_CHOICE,walkmeshOptions);walkmeshMaterial_->Bind(wxEVT_CHOICE,walkmeshOptions);
         canvas_->Bind(neomdl::ui::EVT_WALKMESH_EDIT,[this](neomdl::ui::WalkmeshEvent& event){
             try {editWalkmesh(event);}catch(const std::exception& e){canvas_->cancelWalkmeshStroke();wxui::showError(this,e);}
@@ -348,7 +365,17 @@ public:
             }
             canvas_->setWalkmeshSelection(std::move(faces));refreshWalkmeshInfo();
         });
-        clearFaces->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){canvas_->setWalkmeshSelection({});refreshWalkmeshInfo();});
+        clearFaces->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){canvas_->setWalkmeshSelection({});canvas_->setWalkmeshVertices({});updateActions();});
+        faceVertices_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
+            std::set<neomdl::ui::WalkmeshVertex> vertices;
+            for(const auto& face:canvas_->selectedWalkmeshFaces())for(const auto index:walkmeshes_.at(face.first)->faces.at(face.second).vertices)vertices.emplace(face.first,index);
+            canvas_->setWalkmeshVertices(std::move(vertices));walkmeshTool_->SetSelection(2);configureWalkmesh();updateSnapping();updateActions();
+        });
+        applyVertices_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {
+            const Vec3 position{neogff::ParseFloatDecimal(wxui::toStd(vertexPosition_[0]->GetValue())),neogff::ParseFloatDecimal(wxui::toStd(vertexPosition_[1]->GetValue())),neogff::ParseFloatDecimal(wxui::toStd(vertexPosition_[2]->GetValue()))};
+            neomdl::ui::AreaGizmoEvent event;event.phase=neomdl::ui::AreaGizmoPhase::Begin;event.position=vertexPivot();moveVertices(event);
+            event.position=position;event.phase=neomdl::ui::AreaGizmoPhase::Preview;moveVertices(event);event.phase=neomdl::ui::AreaGizmoPhase::Commit;moveVertices(event);
+        }catch(const std::exception& e){wxui::showError(this,e);}});
         saveWalkmesh_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {saveWalkmesh();}catch(const std::exception& e){wxui::showError(this,e);}});
         apply_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
             try {applyTransform();} catch(const std::exception& e) {wxui::showError(this,e);}
@@ -394,7 +421,7 @@ public:
                 else if(canvas_->areaGizmoDragging())canvas_->cancelAreaGizmo();
                 else event.Skip();
             } else if(!event.HasAnyModifiers()&&!placingArrival_&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->areaPolygonDrawing()&&
-                !canvas_->areaPolygonDragging()&&!canvas_->freeFlyCameraActive()&&
+                !canvas_->areaPolygonDragging()&&!canvas_->freeFlyCameraActive()&&objectTabs_->GetCurrentPage()!=walkmeshPage_&&objectTabs_->GetCurrentPage()!=roomsPage_&&
                 (event.GetKeyCode()=='Q'||event.GetKeyCode()=='W'||event.GetKeyCode()=='E'||event.GetKeyCode()=='R')) {
                 gizmoTool_->SetSelection(event.GetKeyCode()=='Q'?0:event.GetKeyCode()=='W'?1:event.GetKeyCode()=='E'?2:3);updateActions();
             } else event.Skip();
@@ -569,7 +596,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
-        canvas_->setRoomConnections({});managedVisibility_.clear();roomChoice_->Clear();roomViewActive_=false;selectedRoomEdge_.reset();
+        canvas_->setRoomConnections({});managedRoomResources_.clear();roomChoice_->Clear();roomViewActive_=false;selectedRoomEdge_.reset();
         canvas_->setWalkmeshLayers({});walkmeshes_.clear();walkmeshSnapshots_.clear();surfaceIdentity_.clear();walkmeshMaterial_->Clear();walkmeshTool_->SetSelection(0);
         placingArrival_=false;
         if(blueprintEditor_)blueprintEditor_->clear();
@@ -667,7 +694,7 @@ private:
     void refreshWalkmeshInfo();
     void editWalkmesh(const neomdl::ui::WalkmeshEvent& event);
     void paintWalkmeshFace(const neomdl::ui::WalkmeshFace& face);
-    void commitWalkmeshPaint();
+    void commitWalkmeshPaint(const std::string& action="Paint walkmesh material");
     void restoreWalkmeshes();
     void saveWalkmesh();
     void loadRoomData();
@@ -681,6 +708,13 @@ private:
     void stageVisibility();
     void restoreRoomVisibility();
     void saveVisibility();
+    void updateSnapping();
+    neomdl::model::Bounds selectedRoomBounds() const;
+    Vec3 vertexPivot() const;
+    void moveVertices(const neomdl::ui::AreaGizmoEvent& event);
+    void moveRoomGizmo(const neomdl::ui::AreaGizmoEvent& event);
+    void commitRoomMove(Vec3 position);
+    void translatePlacement(const Placement& placement,Vec3 offset);
     void updateDirty();
     void duplicateObject();
     void deleteObject();
@@ -744,14 +778,15 @@ private:
         editMenu_->SetLabel(ID_ModuleUndo,wxui::toWx(undo?"Undo "+history_[historyIndex_].action+"\tCtrl+Z":"Undo\tCtrl+Z"));
         editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
         if(blueprintEditor_)blueprintEditor_->setHistory(undo,redo);
-        gizmoTool_->Enable(editing&&loaded);
+        const bool spatialPage=objectTabs_->GetCurrentPage()==walkmeshPage_||objectTabs_->GetCurrentPage()==roomsPage_;
+        gizmoTool_->Enable(editing&&loaded&&!spatialPage);
         objects_->Enable(!busy);areas_->Enable(!busy&&!transitionDestination_);gameChoice_->Enable(loaded&&!busy&&!transitionDestination_);fields_->Enable(!busy);palette_->Enable(!busy);
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         moduleControls_->Enable(loaded&&!busy);
         cameraControls_->Enable(loaded&&!busy);cameraControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         walkmeshPage_->Enable(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);configureWalkmesh();refreshWalkmeshInfo();
         roomsPage_->Enable(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);configureRoomView();
-        gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
+        gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy&&!spatialPage);walkmeshSnap_->Enable(!busy&&!spatialPage);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
         const bool transition=selected&&(placements_[objects_->GetSelection()].list=="Door List"||placements_[objects_->GetSelection()].list=="TriggerList")&&editing&&!transitionDestination_;
@@ -858,8 +893,14 @@ private:
     std::vector<neomdl::RoomConnection> roomConnections_;
     std::vector<neomdl::LightRoomId> visibilityTargets_;
     std::optional<std::size_t> selectedRoomEdge_;
-    std::set<Key> managedVisibility_;
+    std::set<Key> managedRoomResources_;
     bool roomViewActive_{};
+    wxCheckBox* moveRoom_{};wxCheckBox* moveRoomObjects_{};wxTextCtrl* roomPosition_[3]{};wxButton* applyRoom_{};
+    wxTextCtrl* vertexPosition_[3]{};wxButton* applyVertices_{};wxButton* faceVertices_{};
+    enum class GizmoTarget {Object,Room,Vertices};GizmoTarget gizmoTarget_{GizmoTarget::Object};
+    Vec3 editPivot_{},roomMoveOrigin_{};
+    std::map<neomdl::ui::WalkmeshVertex,Vec3> vertexOrigins_;
+    std::map<std::string,std::set<std::uint32_t>> movedVertices_;
     BlueprintEditor* blueprintEditor_{};Key blueprintKey_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
@@ -1106,12 +1147,20 @@ void ModuleEditor::restoreEdit(std::size_t index) {
 
 void ModuleEditor::updateGizmo() {
     if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing()||canvas_->walkmeshDragging())return;
+    const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
     if(objectTabs_->GetCurrentPage()==walkmeshPage_||objectTabs_->GetCurrentPage()==roomsPage_) {
         canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);canvas_->setAreaPolygon({},false);canvas_->setAreaMarkers({},{});
-        gizmoHint_->SetLabel(objectTabs_->GetCurrentPage()==roomsPage_?"Rooms: click a boundary edge to inspect its connection. Drag to orbit; right-drag to pan.":"Walkmesh: click or box-select faces. Alt-drag orbits; right-drag pans.");return;
+        if(sceneReady&&objectTabs_->GetCurrentPage()==roomsPage_&&moveRoom_->GetValue()&&frameRoom_->IsEnabled()) {
+            const auto bounds=selectedRoomBounds();
+            canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::Move,{(bounds.minimum.x+bounds.maximum.x)/2,(bounds.minimum.y+bounds.maximum.y)/2,(bounds.minimum.z+bounds.maximum.z)/2});
+            gizmoHint_->SetLabel("Move room: drag XYZ or the XY center. LYT, WOK and checked placements move together. Esc cancels.");
+        } else if(sceneReady&&objectTabs_->GetCurrentPage()==walkmeshPage_&&showWalkmesh_->GetValue()&&walkmeshTool_->GetSelection()==2&&!canvas_->selectedWalkmeshVertices().empty()) {
+            canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::Move,vertexPivot());
+            gizmoHint_->SetLabel("Move selected walkmesh vertices with XYZ or the XY center. Grid snapping applies. Esc cancels.");
+        } else gizmoHint_->SetLabel(objectTabs_->GetCurrentPage()==roomsPage_?"Rooms: click a boundary edge to inspect its connection. Drag to orbit; right-drag to pan.":"Walkmesh: click or box-select faces or vertices. Alt-drag orbits; right-drag pans.");
+        gizmoHint_->SetToolTip(gizmoHint_->GetLabel());return;
     }
     const auto selected=objects_->GetSelection();
-    const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
     const bool ready=sceneReady&&!palette_->placing()&&selected!=wxNOT_FOUND;
     std::vector<neomdl::ui::AreaEditorMarker> markers;
     if(sceneReady)for(const auto& p:placements_) {
@@ -1222,6 +1271,13 @@ void ModuleEditor::polygonChanged(const neomdl::ui::AreaPolygonEvent& event) {
 
 void ModuleEditor::gizmoChanged(const neomdl::ui::AreaGizmoEvent& event) {
     try {
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Begin)
+            gizmoTarget_=objectTabs_->GetCurrentPage()==roomsPage_?GizmoTarget::Room:objectTabs_->GetCurrentPage()==walkmeshPage_?GizmoTarget::Vertices:GizmoTarget::Object;
+        if(gizmoTarget_!=GizmoTarget::Object) {
+            if(gizmoTarget_==GizmoTarget::Room)moveRoomGizmo(event);else moveVertices(event);
+            if(event.phase==neomdl::ui::AreaGizmoPhase::Commit||event.phase==neomdl::ui::AreaGizmoPhase::Cancel)gizmoTarget_=GizmoTarget::Object;
+            return;
+        }
         if(event.phase==neomdl::ui::AreaGizmoPhase::Begin) {rememberSelection();updateActions();return;}
         const auto& p=placements_.at(objects_->GetSelection());
         const float values[]={event.position.x,event.position.y,event.position.z,event.heading};
@@ -1584,14 +1640,123 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position.x)+", "+decimal(position.y)+", "+decimal(position.z)));
 }
 
+void ModuleEditor::updateSnapping() {
+    const float grids[]={0,0.1f,0.25f,0.5f,1,2},angles[]={0,5,15,30,45,90};
+    const bool spatialPage=objectTabs_->GetCurrentPage()==roomsPage_||objectTabs_->GetCurrentPage()==walkmeshPage_;
+    canvas_->setAreaSnapping({grids[gridSnap_->GetSelection()],angles[rotationSnap_->GetSelection()],!spatialPage&&walkmeshSnap_->GetValue()});
+}
+
+Vec3 ModuleEditor::vertexPivot() const {
+    double x=0,y=0,z=0;
+    const auto& selection=canvas_->selectedWalkmeshVertices();
+    for(const auto& vertex:selection) {const auto& point=walkmeshes_.at(vertex.first)->vertices.at(vertex.second);x+=point[0];y+=point[1];z+=point[2];}
+    return {float(x/selection.size()),float(y/selection.size()),float(z/selection.size())};
+}
+
+void ModuleEditor::moveVertices(const neomdl::ui::AreaGizmoEvent& event) {
+    using Phase=neomdl::ui::AreaGizmoPhase;
+    if(event.phase==Phase::Begin) {
+        rememberSelection();editPivot_=event.position;vertexOrigins_.clear();movedVertices_.clear();paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();
+        for(const auto& vertex:canvas_->selectedWalkmeshVertices()) {const auto& point=walkmeshes_.at(vertex.first)->vertices.at(vertex.second);vertexOrigins_.emplace(vertex,Vec3{point[0],point[1],point[2]});}
+        updateActions();return;
+    }
+    const Vec3 delta{event.position.x-editPivot_.x,event.position.y-editPivot_.y,event.position.z-editPivot_.z};
+    if(event.phase==Phase::Cancel||(delta.x==0&&delta.y==0&&delta.z==0)) {
+        for(const auto& [vertex,point]:vertexOrigins_)walkmeshes_.at(vertex.first)->vertices.at(vertex.second)={point.x,point.y,point.z};
+        paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();movedVertices_.clear();
+        if(event.phase!=Phase::Preview)vertexOrigins_.clear();
+        canvas_->Refresh(false);updateActions();return;
+    }
+    for(const auto& [vertex,point]:vertexOrigins_) {
+        walkmeshes_.at(vertex.first)->vertices.at(vertex.second)={point.x+delta.x,point.y+delta.y,point.z+delta.z};
+        paintedWalkmeshes_.insert(vertex.first);rebuildWalkmeshes_.insert(vertex.first);movedVertices_[vertex.first].insert(vertex.second);
+    }
+    const float position[]={event.position.x,event.position.y,event.position.z};
+    for(std::size_t axis=0;axis<3;++axis)vertexPosition_[axis]->ChangeValue(wxui::toWx(decimal(position[axis])));
+    canvas_->Refresh(false);
+    if(event.phase==Phase::Commit) {commitWalkmeshPaint("Move walkmesh vertices");vertexOrigins_.clear();}
+}
+
+void ModuleEditor::moveRoomGizmo(const neomdl::ui::AreaGizmoEvent& event) {
+    using Phase=neomdl::ui::AreaGizmoPhase;
+    if(event.phase==Phase::Begin) {
+        rememberSelection();editPivot_=event.position;
+        roomMoveOrigin_=canvas_->areaScene().rooms().at(std::size_t(roomChoice_->GetSelection())).position;
+        updateActions();return;
+    }
+    const Vec3 delta{event.position.x-editPivot_.x,event.position.y-editPivot_.y,event.position.z-editPivot_.z};
+    const Vec3 position{roomMoveOrigin_.x+delta.x,roomMoveOrigin_.y+delta.y,roomMoveOrigin_.z+delta.z};
+    const float values[]={position.x,position.y,position.z};
+    for(std::size_t axis=0;axis<3;++axis)roomPosition_[axis]->ChangeValue(wxui::toWx(decimal(values[axis])));
+    if(event.phase==Phase::Preview)canvas_->previewRoomMove(neomdl::RoomMovePreview{canvas_->areaScene().rooms().at(std::size_t(roomChoice_->GetSelection())).id,delta});
+    else {
+        canvas_->previewRoomMove(std::nullopt);
+        if(event.phase==Phase::Commit)commitRoomMove(position);
+        updateActions();
+    }
+}
+
+void ModuleEditor::translatePlacement(const Placement& p,Vec3 offset) {
+    auto& resource=resources_.at(identityKeys_.at(p.identity));auto& root=*resource.model->gff().root();
+    auto& record=p.coordinates==Placement::Coordinates::Entry?root:*static_cast<neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    const float delta[]={offset.x,offset.y,offset.z};
+    if(p.list=="Encounter List")if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))
+        for(auto& spawn:spawns->allStructs()) {
+            const char* labels[]={"X","Y","Z"};const auto fields=fieldsOf(*spawn);
+            for(std::size_t axis=0;axis<3;++axis)if(delta[axis]!=0)setField(*spawn,std::make_unique<neogff::GffFloatField>(labels[axis],scalar(fields,labels[axis])+delta[axis]));
+        }
+    if(p.list=="TriggerList"&&!record.GetFieldByLabel("Geometry")) {
+        const auto& triggers=canvas_->areaScene().triggers();
+        const auto& trigger=*std::find_if(triggers.begin(),triggers.end(),[&](const auto& value){return value.sourceIndex==p.index;});
+        auto geometry=std::make_unique<neogff::GffList>("Geometry");
+        for(const auto& point:trigger.worldFootprint) {
+            auto vertex=std::make_unique<neogff::GffStruct>();vertex->typeid_=3;
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointX",point.x-p.position.x));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointY",point.y-p.position.y));
+            vertex->AddField(std::make_unique<neogff::GffFloatField>("PointZ",point.z-p.position.z));geometry->AddStruct(std::move(vertex));
+        }
+        setField(record,std::move(geometry));
+    }
+    if(p.coordinates==Placement::Coordinates::Vector) {
+        auto& point=static_cast<neogff::GffPositionField&>(*record.GetFieldByLabel("Position"));
+        for(std::size_t axis=0;axis<3;++axis)if(delta[axis]!=0)point.value[axis]+=delta[axis];
+    } else {
+        const char* shortNames[]={"X","Y","Z"},*longNames[]={"XPosition","YPosition","ZPosition"},*entryNames[]={"Mod_Entry_X","Mod_Entry_Y","Mod_Entry_Z"};
+        const auto labels=p.coordinates==Placement::Coordinates::Entry?entryNames:p.coordinates==Placement::Coordinates::Short?shortNames:longNames;
+        const float position[]={p.position.x,p.position.y,p.position.z};
+        for(std::size_t axis=0;axis<3;++axis)if(delta[axis]!=0)setField(record,std::make_unique<neogff::GffFloatField>(labels[axis],position[axis]+delta[axis]));
+    }
+    resource.model->gff().dirty(true);
+}
+
+void ModuleEditor::commitRoomMove(Vec3 position) {
+    const auto& scene=canvas_->areaScene();const auto& room=scene.rooms().at(std::size_t(roomChoice_->GetSelection()));
+    const Vec3 delta{position.x-room.position.x,position.y-room.position.y,position.z-room.position.z};
+    if(delta.x==0&&delta.y==0&&delta.z==0)return;
+    rememberSelection();std::set<Key> changed;
+    if(moveRoomObjects_->GetValue()&&room.walkmesh&&scene.roomPositionQueriesAvailable())for(const auto& placement:placements_)
+        if(scene.findRoomAt(placement.position)==room.id) {translatePlacement(placement,delta);changed.insert(identityKeys_.at(placement.identity));}
+    auto& layout=addedTemplates_.at(resourceKey(scene.layoutSource()));
+    layout.bytes=neomdl::moveLayoutRoom(layout.bytes,std::size_t(roomChoice_->GetSelection()),position);
+    if(room.walkmesh) {
+        const Key key{neomdl::resourceKey(room.name),kWok};auto& mesh=*walkmeshes_.at(key.first);
+        neomdl::translateRoomWalkmesh(mesh,delta);addedTemplates_.at(key).bytes=neoshared::bwm::writeBwm(mesh);
+        walkmeshSnapshots_[key]=std::make_shared<const std::vector<std::uint8_t>>(addedTemplates_.at(key).bytes);
+    }
+    for(const auto& key:changed)stage(resources_.at(key));
+    fields_->refreshActiveDocument();rebuildObjects();recordEdit("Move room");requestPreview();
+}
+
 void ModuleEditor::loadRoomData() {
-    const auto& scene=canvas_->areaScene();const Key key{neomdl::resourceKey(scene.visibilityName()),kVis};
-    if(managedVisibility_.insert(key).second&&scene.visibilitySource()) {
-        const auto& source=*scene.visibilitySource();addedTemplates_.emplace(key,source);templateOrigins_.emplace(key,hostResources_);
+    const auto& scene=canvas_->areaScene();
+    const auto registerSource=[&](const ResourceDocument& source) {
+        const auto key=resourceKey(source);addedTemplates_.emplace(key,source);templateOrigins_.emplace(key,hostResources_);
         savedTemplateBytes_.emplace(key,std::make_shared<const std::vector<std::uint8_t>>(source.bytes));
         for(auto& state:history_) {state.templates.emplace(key,source);state.origins.emplace(key,hostResources_);}
         inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
-    }
+    };
+    if(managedRoomResources_.insert(resourceKey(scene.layoutSource())).second)registerSource(scene.layoutSource());
+    if(managedRoomResources_.insert({neomdl::resourceKey(scene.visibilityName()),kVis}).second&&scene.visibilitySource())registerSource(*scene.visibilitySource());
     const auto selected=roomChoice_->GetStringSelection();roomChoice_->Clear();
     for(std::size_t i=0;i<scene.rooms().size();++i)roomChoice_->Append(wxui::toWx(std::to_string(i)+" — "+scene.rooms()[i].name));
     if(!scene.rooms().empty())roomChoice_->SetSelection(0);
@@ -1612,10 +1777,15 @@ void ModuleEditor::refreshRoomControls() {
     selectedRoomEdge_.reset();roomConnections_.clear();roomEdges_->DeleteAllItems();visibleRooms_->Clear();visibilityTargets_.clear();
     frameRoom_->Disable();frameEdge_->Disable();inspectNeighbor_->Disable();saveVisibility_->Enable(!canvas_->areaScene().empty());
     const auto& rooms=canvas_->areaScene().rooms();
+    applyRoom_->Enable(!rooms.empty());moveRoom_->Disable();moveRoomObjects_->Disable();
     if(rooms.empty()) {
+        for(auto* field:roomPosition_)field->Clear();
         roomChoice_->Clear();canvas_->setRoomConnections({});roomEdgeInfo_->SetLabel("Load a 3D area to inspect its room connections.");configureRoomView();return;
     }
     const auto& source=rooms.at(std::size_t(roomChoice_->GetSelection()));roomConnections_=canvas_->areaScene().roomConnections(source.id);
+    const float position[]={source.position.x,source.position.y,source.position.z};
+    for(std::size_t axis=0;axis<3;++axis)roomPosition_[axis]->ChangeValue(wxui::toWx(decimal(position[axis])));
+    moveRoomObjects_->Enable(source.walkmesh.has_value()&&canvas_->areaScene().roomPositionQueriesAvailable());
     for(std::size_t i=0;i<roomConnections_.size();++i) {
         const auto& edge=roomConnections_[i];const auto row=roomEdges_->InsertItem(long(i),wxui::toWx(std::to_string(edge.edge/3)+"/"+std::to_string(edge.edge%3)));
         std::string target="—";
@@ -1624,21 +1794,23 @@ void ModuleEditor::refreshRoomControls() {
     }
     const auto linked=std::count_if(roomConnections_.begin(),roomConnections_.end(),[](const auto& edge){return edge.target!=-1;});
     roomEdgeInfo_->SetLabel(wxui::toWx(source.walkmesh?std::to_string(roomConnections_.size())+" boundary edges; "+std::to_string(linked)+" authored room links.":"This room has no loaded WOK."));roomEdgeInfo_->Wrap(FromDIP(195));
-    frameRoom_->Enable(std::any_of(source.meshBounds.begin(),source.meshBounds.end(),[](const auto& box){return box.valid;}));
+    const bool canFrame=std::any_of(source.meshBounds.begin(),source.meshBounds.end(),[](const auto& box){return box.valid;});
+    frameRoom_->Enable(canFrame);moveRoom_->Enable(canFrame);
     for(const auto& room:rooms)if(room.id!=source.id) {
         visibilityTargets_.push_back(room.id);const auto item=visibleRooms_->Append(wxui::toWx(room.name));
         visibleRooms_->Check(unsigned(item),std::find(source.influencingRooms.begin(),source.influencingRooms.end(),room.id)!=source.influencingRooms.end());
     }
     const auto& name=canvas_->areaScene().visibilityName();
     visibilityInfo_->SetLabel(wxui::toWx(name+".vis — checks apply to both rooms."));visibilityInfo_->Wrap(FromDIP(195));
-    canvas_->setRoomConnections(roomConnections_);configureRoomView();roomsPage_->Layout();
+    canvas_->setRoomConnections(roomConnections_);configureRoomView();updateGizmo();roomsPage_->Layout();
 }
 
 void ModuleEditor::configureRoomView() {
     const bool active=previewCurrent_&&!requested_&&!loading_.valid()&&objectTabs_->GetCurrentPage()==roomsPage_;
-    canvas_->configureRoomConnections(active,xrayConnections_->GetValue(),selectedRoomEdge_);
+    previewVisibility_->Enable(!moveRoom_->GetValue());
+    canvas_->configureRoomConnections(active&&!moveRoom_->GetValue(),xrayConnections_->GetValue(),selectedRoomEdge_);
     if(active) {
-        if(previewVisibility_->GetValue()&&roomChoice_->GetSelection()!=wxNOT_FOUND)
+        if(!moveRoom_->GetValue()&&previewVisibility_->GetValue()&&roomChoice_->GetSelection()!=wxNOT_FOUND)
             canvas_->setAreaRoom(canvas_->areaScene().rooms().at(std::size_t(roomChoice_->GetSelection())).id);
         else canvas_->setAreaRoom(std::nullopt);
     } else if(roomViewActive_)canvas_->useReplayedAreaRoom();
@@ -1662,13 +1834,18 @@ void ModuleEditor::inspectRoomNeighbor() {
     roomChoice_->SetSelection(int(target));refreshRoomControls();
 }
 
-void ModuleEditor::frameSelectedRoom() {
+neomdl::model::Bounds ModuleEditor::selectedRoomBounds() const {
     const auto& room=canvas_->areaScene().rooms().at(std::size_t(roomChoice_->GetSelection()));
     auto bounds=*std::find_if(room.meshBounds.begin(),room.meshBounds.end(),[](const auto& box){return box.valid;});
     for(const auto& box:room.meshBounds)if(box.valid) {
         bounds.minimum.x=std::min(bounds.minimum.x,box.minimum.x);bounds.minimum.y=std::min(bounds.minimum.y,box.minimum.y);bounds.minimum.z=std::min(bounds.minimum.z,box.minimum.z);
         bounds.maximum.x=std::max(bounds.maximum.x,box.maximum.x);bounds.maximum.y=std::max(bounds.maximum.y,box.maximum.y);bounds.maximum.z=std::max(bounds.maximum.z,box.maximum.z);
     }
+    return bounds;
+}
+
+void ModuleEditor::frameSelectedRoom() {
+    const auto bounds=selectedRoomBounds();
     const Vec3 center{(bounds.minimum.x+bounds.maximum.x)/2,(bounds.minimum.y+bounds.maximum.y)/2,(bounds.minimum.z+bounds.maximum.z)/2};
     canvas_->framePosition(center,std::max({bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y,bounds.maximum.z-bounds.minimum.z}));
 }
@@ -1754,7 +1931,8 @@ void ModuleEditor::loadWalkmeshes() {
 void ModuleEditor::configureWalkmesh() {
     const bool ready=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
     const bool visible=ready&&objectTabs_->GetCurrentPage()==walkmeshPage_&&showWalkmesh_->GetValue();
-    const auto tool=visible?(walkmeshTool_->GetSelection()==0?neomdl::ui::WalkmeshTool::Select:neomdl::ui::WalkmeshTool::Paint):neomdl::ui::WalkmeshTool::View;
+    const neomdl::ui::WalkmeshTool tools[]={neomdl::ui::WalkmeshTool::Select,neomdl::ui::WalkmeshTool::Paint,neomdl::ui::WalkmeshTool::Vertices};
+    const auto tool=visible?tools[walkmeshTool_->GetSelection()]:neomdl::ui::WalkmeshTool::View;
     const auto room=walkmeshRooms_->GetSelection()>0?wxui::toStd(walkmeshRooms_->GetStringSelection()):std::string{};
     canvas_->configureWalkmesh(visible,xrayWalkmesh_->GetValue(),tool,room);
 }
@@ -1763,7 +1941,8 @@ void ModuleEditor::refreshWalkmeshInfo() {
     const auto count=canvas_->selectedWalkmeshFaces().size();
     std::map<std::uint32_t,std::size_t> surfaces;
     for(const auto& face:canvas_->selectedWalkmeshFaces())++surfaces[walkmeshes_.at(face.first)->faces.at(face.second).material];
-    auto info=std::to_string(count)+" faces selected.";
+    const auto vertices=canvas_->selectedWalkmeshVertices().size();
+    auto info=std::to_string(count)+" faces; "+std::to_string(vertices)+" vertices selected.";
     for(const auto& [surface,faces]:surfaces)info+="\nSurface "+std::to_string(surface)+": "+std::to_string(faces)+" faces";
     walkmeshInfo_->SetLabel(wxui::toWx(info));walkmeshInfo_->Wrap(FromDIP(195));
     const auto material=walkmeshMaterial_->GetSelection();
@@ -1773,6 +1952,14 @@ void ModuleEditor::refreshWalkmeshInfo() {
         walkmeshSwatch_->SetBackgroundColour(wxColour(int(color.x*255),int(color.y*255),int(color.z*255)));walkmeshSwatch_->Refresh();
     }
     applyWalkmesh_->Enable(count!=0&&material!=wxNOT_FOUND);sameWalkmesh_->Enable(material!=wxNOT_FOUND);walkmeshTool_->Enable(material!=wxNOT_FOUND);
+    faceVertices_->Enable(count!=0&&material!=wxNOT_FOUND);
+    const bool editVertices=walkmeshTool_->GetSelection()==2&&vertices!=0;
+    applyVertices_->Enable(editVertices);
+    for(auto* field:vertexPosition_)field->Enable(editVertices);
+    if(vertices&&!canvas_->areaGizmoDragging()) {
+        const auto center=vertexPivot();const float position[]={center.x,center.y,center.z};
+        for(std::size_t axis=0;axis<3;++axis)vertexPosition_[axis]->ChangeValue(wxui::toWx(decimal(position[axis])));
+    } else if(!vertices)for(auto* field:vertexPosition_)field->Clear();
     saveWalkmesh_->Enable(walkmeshRooms_->GetSelection()>0);
     walkmeshPage_->Layout();
 }
@@ -1785,7 +1972,7 @@ void ModuleEditor::paintWalkmeshFace(const neomdl::ui::WalkmeshFace& face) {
     material=next;paintedWalkmeshes_.insert(face.first);
 }
 
-void ModuleEditor::commitWalkmeshPaint() {
+void ModuleEditor::commitWalkmeshPaint(const std::string& action) {
     auto selection=canvas_->selectedWalkmeshFaces();
     for(const auto& room:paintedWalkmeshes_) {
         auto& mesh=*walkmeshes_.at(room);
@@ -1793,6 +1980,10 @@ void ModuleEditor::commitWalkmeshPaint() {
             const auto count=std::count_if(mesh.faces.begin(),mesh.faces.end(),[&](const auto& face){return walkableSurfaces_.count(face.material)!=0;});
             std::uint32_t walkable=0,blocked=std::uint32_t(count);std::vector<std::uint32_t> remap;remap.reserve(mesh.faces.size());
             auto normals=mesh.faceNormals;auto distances=mesh.faceDistances;
+            std::set<std::size_t> changedFaces;
+            const auto moved=movedVertices_.find(room);
+            if(moved!=movedVertices_.end())for(std::size_t i=0;i<mesh.faces.size();++i)
+                if(std::any_of(mesh.faces[i].vertices.begin(),mesh.faces[i].vertices.end(),[&](auto vertex){return moved->second.count(vertex)!=0;}))changedFaces.insert(i);
             std::set<neomdl::ui::WalkmeshFace> remapped;
             for(const auto& face:selection)if(face.first!=room)remapped.insert(face);
             for(std::size_t i=0;i<mesh.faces.size();++i) {
@@ -1800,15 +1991,15 @@ void ModuleEditor::commitWalkmeshPaint() {
                 if(selection.count({room,std::uint32_t(i)}))remapped.emplace(room,target);
             }
             neoshared::bwm::buildBwm(mesh,walkableSurfaces_);
-            for(std::size_t i=0;i<remap.size();++i) {mesh.faceNormals[remap[i]]=normals[i];mesh.faceDistances[remap[i]]=distances[i];}
+            for(std::size_t i=0;i<remap.size();++i)if(!changedFaces.count(i)) {mesh.faceNormals[remap[i]]=normals[i];mesh.faceDistances[remap[i]]=distances[i];}
             selection=std::move(remapped);
         }
         addedTemplates_.at({room,kWok}).bytes=neoshared::bwm::writeBwm(mesh);
         walkmeshSnapshots_[{room,kWok}]=std::make_shared<const std::vector<std::uint8_t>>(addedTemplates_.at({room,kWok}).bytes);
         canvas_->updateRoomWalkmesh(room,mesh);
     }
-    canvas_->setWalkmeshSelection(std::move(selection));recordEdit("Paint walkmesh material");
-    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();updateActions();
+    canvas_->setWalkmeshSelection(std::move(selection));recordEdit(action);
+    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();movedVertices_.clear();updateActions();
 }
 
 void ModuleEditor::restoreWalkmeshes() {
@@ -1817,7 +2008,7 @@ void ModuleEditor::restoreWalkmeshes() {
     }
     for(const auto& room:canvas_->areaScene().rooms())if(room.walkmesh)
         canvas_->updateRoomWalkmesh(room.name,*walkmeshes_.at(neomdl::resourceKey(room.name)));
-    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();canvas_->setWalkmeshSelection({});refreshWalkmeshInfo();
+    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();movedVertices_.clear();vertexOrigins_.clear();canvas_->setWalkmeshSelection({});canvas_->setWalkmeshVertices({});refreshWalkmeshInfo();
 }
 
 void ModuleEditor::editWalkmesh(const neomdl::ui::WalkmeshEvent& event) {
