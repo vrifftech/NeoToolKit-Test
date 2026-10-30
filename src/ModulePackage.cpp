@@ -172,8 +172,8 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                         else if(!templateGit&&((context=="CreatureList"&&label=="ResRef")||label=="SpawnResRef"))add(name,2027,resolve,true);
                         else if(templateGit&&context=="StoreList"&&label=="ResRef")add(name,2051,resolve,true);
                         else if(templateGit&&label=="TemplateResRef") {
-                            const std::map<std::string,std::uint16_t> types={{"Creature List",2027},{"Placeable List",2044},{"Door List",2042},{"TriggerList",2032},{"SoundList",2035},{"Encounter List",2040},{"List",2025}};
-                            if(const auto type=types.find(context);type!=types.end())add(name,type->second,resolve,true);
+                            constexpr std::pair<const char*,std::uint16_t> types[]={{"Creature List",2027},{"Placeable List",2044},{"Door List",2042},{"TriggerList",2032},{"SoundList",2035},{"Encounter List",2040},{"List",2025}};
+                            for(const auto& [list,type]:types)if(context==list)add(name,type,resolve,true);
                         } else if(key.second==2014&&(label=="Area_Name"||label=="Mod_Entry_Area")) {
                             add(name,2012,resolve,true);add(name,2023,resolve,true);add(name,3000,resolve,false);add(name,3001,resolve,false);
                         }
