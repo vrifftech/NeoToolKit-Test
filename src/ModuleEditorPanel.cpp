@@ -1526,9 +1526,13 @@ bool ModuleEditor::packageModule() {
     if(!archivePath_.empty()) {
         addArchive(archivePath_);
         std::map<std::string,std::filesystem::path> siblings;
-        for(const auto& file:std::filesystem::directory_iterator(archivePath_.parent_path()))
-            if(file.is_regular_file())siblings.emplace(neomdl::resourceKey(neoshared::pathToUtf8(file.path().filename())),file.path());
-        for(const auto* suffix:{".mod","_s.rim",".rim","_dlg.erf"})if(const auto found=siblings.find(moduleName_+suffix);found!=siblings.end())addArchive(found->second);
+        const std::vector<std::string> candidates{moduleName_+".mod",moduleName_+"_s.rim",moduleName_+".rim",moduleName_+"_dlg.erf"};
+        for(const auto& file:std::filesystem::directory_iterator(archivePath_.parent_path())) {
+            auto name=neoshared::pathToUtf8(file.path().filename());
+            for(auto& c:name)if(c>='A'&&c<='Z')c=char(c+('a'-'A'));
+            if(std::find(candidates.begin(),candidates.end(),name)!=candidates.end()&&file.is_regular_file())siblings.emplace(name,file.path());
+        }
+        for(const auto& name:candidates)if(const auto found=siblings.find(name);found!=siblings.end())addArchive(found->second);
     }
     if(session_)for(const auto& path:session_->moduleScope()->archives)addArchive(path);
     const auto sources=chooseModulePackageSources(this,std::move(archives),localDirectory_,dark_);if(!sources)return false;

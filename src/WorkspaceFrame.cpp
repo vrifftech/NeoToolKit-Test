@@ -431,7 +431,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
     try {
         auto ext=editorExtensionForPath(path);std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
         std::error_code ec;
-        if(std::filesystem::is_directory(path,ec)||ext==".key") {
+        if(ext==".key"||std::filesystem::is_directory(path,ec)) {
             if(!editor.empty())throw std::runtime_error("Choose a resource inside the game browser, not an editor for a KEY/directory.");
             browser_->openPath(path);return;
         }
