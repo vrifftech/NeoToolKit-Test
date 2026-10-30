@@ -41,7 +41,8 @@ constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
-      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule,ID_EditBlueprint};
+      ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule,ID_EditBlueprint,
+      ID_PlaceArrival,ID_LinkTransition};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -105,16 +106,19 @@ std::shared_ptr<neomdl::GameResourceSession> openModuleAssets(const neoshared::g
 
 class ModuleEditor final : public ModuleEditorPanel {
 public:
-    ModuleEditor(wxWindow* parent,neomodules::Context context)
-        : ModuleEditorPanel(parent,std::move(context)),timer_(this) {
+    ModuleEditor(wxWindow* parent,neomodules::Context context,bool transitionDestination=false)
+        : ModuleEditorPanel(parent,std::move(context)),transitionDestination_(transitionDestination),timer_(this) {
         auto* root=new wxBoxSizer(wxVERTICAL);
         auto* tools=new wxWrapSizer(wxHORIZONTAL);
         const std::pair<int,const char*> actions[]={{ID_OpenModule,"Open module..."},
             {ID_ModuleAssets,"Game resources..."},{ID_RefreshArea,"Refresh 3D"},
-            {ID_AddObject,"Add object..."},
+            {ID_AddObject,"Add object..."},{ID_PlaceArrival,"Place arrival waypoint"},
             {ID_ModuleUndo,"Undo"},{ID_ModuleRedo,"Redo"},
             {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_PackageModule,"Package MOD..."},{ID_SceneReport,"Scene report..."}};
         for(const auto& action:actions)tools->Add(new wxButton(this,action.first,action.second),0,wxALL,3);
+        if(transitionDestination_) {
+            FindWindow(ID_OpenModule)->Hide();FindWindow(ID_ModuleAssets)->Hide();
+        }
         root->Add(tools,0,wxEXPAND|wxALL,4);
         sourceLabel_=new wxStaticText(this,wxID_ANY,"Open a RIM/MOD archive or loose GIT, ARE or IFO resource.");
         root->Add(sourceLabel_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,8);
@@ -145,7 +149,8 @@ public:
         objectBox->Add(apply_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
         auto* objectTools=new wxWrapSizer(wxHORIZONTAL);
         for(const auto& action:std::vector<std::pair<int,const char*>>{{ID_FrameObject,"Frame"},
-                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"},{ID_EditBlueprint,"Edit blueprint..."}})
+                {ID_DuplicateObject,"Duplicate"},{ID_DeleteObject,"Delete"},{ID_RedrawTrigger,"Redraw footprint"},{ID_EditBlueprint,"Edit blueprint..."},
+                {ID_LinkTransition,"Link transition..."}})
             objectTools->Add(new wxButton(objectPage,action.first,action.second),0,wxALL,3);
         objectBox->Add(objectTools,0,wxEXPAND|wxALL,3);objectPage->SetSizer(objectBox);
         objectSource_=new wxStaticText(objectPage,wxID_ANY,"Select an object to see where its properties load from.");
@@ -234,6 +239,7 @@ public:
         });
         objects_->Bind(wxEVT_LISTBOX,[this](wxCommandEvent&){selectObject(objects_->GetSelection(),true);rememberSelection();});
         gizmoTool_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){
+            placingArrival_=false;
             canvas_->cancelAreaPolygon();canvas_->cancelAreaGizmo();palette_->stopPlacing();updateActions();
         });
         const auto snapping=[this](wxCommandEvent&){
@@ -255,7 +261,7 @@ public:
             rememberSelection();
         });
         palette_->Bind(EVT_OBJECT_PLACEMENT_MODE,[this](wxCommandEvent&){
-            if(palette_->placing())canvas_->cancelAreaGizmo();
+            if(palette_->placing()) {placingArrival_=false;canvas_->cancelAreaGizmo();}
             updateActions();
         });
         canvas_->Bind(neomdl::ui::EVT_AREA_GIZMO,[this](neomdl::ui::AreaGizmoEvent& event){gizmoChanged(event);});
@@ -267,19 +273,28 @@ public:
             try {beginTriggerDrawing(true);}catch(const std::exception& e){wxui::showError(this,e);}
         });
         canvas_->Bind(wxEVT_LEFT_DOWN,[this](wxMouseEvent& event){
-            if(palette_->placing()) {canvas_->SetFocus();dropObject(event.GetPosition());}
+            if(placingArrival_) {
+                try {
+                    auto point=canvas_->areaPlacementPoint(event.GetPosition());
+                    if(point)point=canvas_->snappedAreaPoint(*point);
+                    if(point) {placingArrival_=false;insertArrivalWaypoint(*point);}
+                    else setModuleStatusText("No placement intersection for the selected surface and snapping settings.");
+                } catch(const std::exception& e) {wxui::showError(this,e);}
+            } else if(palette_->placing()) {canvas_->SetFocus();dropObject(event.GetPosition());}
             else event.Skip();
         });
         canvas_->Bind(wxEVT_RIGHT_DOWN,[this](wxMouseEvent& event){
-            if(palette_->placing())palette_->stopPlacing();else event.Skip();
+            if(placingArrival_) {placingArrival_=false;updateActions();}
+            else if(palette_->placing())palette_->stopPlacing();else event.Skip();
         });
         canvas_->Bind(wxEVT_CHAR_HOOK,[this](wxKeyEvent& event){
             if(event.GetKeyCode()==WXK_ESCAPE) {
-                if(palette_->placing())palette_->stopPlacing();
+                if(placingArrival_) {placingArrival_=false;updateActions();}
+                else if(palette_->placing())palette_->stopPlacing();
                 else if(canvas_->areaPolygonDrawing()||canvas_->areaPolygonDragging())canvas_->cancelAreaPolygon();
                 else if(canvas_->areaGizmoDragging())canvas_->cancelAreaGizmo();
                 else event.Skip();
-            } else if(!event.HasAnyModifiers()&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->areaPolygonDrawing()&&
+            } else if(!event.HasAnyModifiers()&&!placingArrival_&&!palette_->placing()&&!canvas_->areaGizmoDragging()&&!canvas_->areaPolygonDrawing()&&
                 !canvas_->areaPolygonDragging()&&!canvas_->freeFlyCameraActive()&&
                 (event.GetKeyCode()=='Q'||event.GetKeyCode()=='W'||event.GetKeyCode()=='E'||event.GetKeyCode()=='R')) {
                 gizmoTool_->SetSelection(event.GetKeyCode()=='Q'?0:event.GetKeyCode()=='W'?1:event.GetKeyCode()=='E'?2:3);updateActions();
@@ -442,6 +457,8 @@ private:
         objects->Append(ID_DuplicateObject,"Duplicate Selected Object");objects->Append(ID_DeleteObject,"Delete Selected Object");
         objects->Append(ID_RedrawTrigger,"Redraw Selected Polygon Footprint");
         objects->Append(ID_EditBlueprint,"Edit Selected Object Blueprint...");
+        objects->Append(ID_PlaceArrival,"Place Arrival Waypoint");
+        objects->Append(ID_LinkTransition,"Link Selected Transition...");
         menus->Append(objects,"Objects");
         fieldMenus_=fields_->takeMenus();
         for(std::size_t i=0;i<fieldMenus_->GetMenuCount();) {
@@ -452,6 +469,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
+        placingArrival_=false;
         if(blueprintEditor_)blueprintEditor_->clear();
         cameraControls_->stopPreview();cameraControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
         areaControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
@@ -468,6 +486,10 @@ private:
         }
         for(const auto& name:names)areas_->Append(wxui::toWx(name));
         if(!names.empty())areas_->SetSelection(0);
+        if(transitionDestination_)if(const auto ifo=resources_.find({"module",kIfo});ifo!=resources_.end()) {
+            const auto& list=static_cast<const neogff::GffList&>(*ifo->second.model->gff().root()->GetFieldByLabel("Mod_Area_list"));
+            areas_->SetStringSelection(wxui::toWx(list.GetStruct(0)->GetFieldByLabel("Area_Name")->GetString()));
+        }
         selectedPath_.clear();pathOwners_.clear();ownerPaths_.clear();previewCurrent_=false;
         auto document=neomdl::ModelDocument::emptySceneDocument("module-editor:"+title,title,game_);
         canvas_->setDocument(document.get());document_=std::move(document);
@@ -543,13 +565,21 @@ private:
     void chooseAssets();
     bool canPlaceObject() const {return session_&&previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing()&&
         !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
-    void updatePlacementCursor() {canvas_->SetCursor(wxCursor(palette_->placing()&&canPlaceObject()?wxCURSOR_CROSS:wxCURSOR_ARROW));}
+    bool canPlaceArrival() const {return previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing()&&
+        !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
+    void updatePlacementCursor() {canvas_->SetCursor(wxCursor((placingArrival_||palette_->placing())?wxCURSOR_CROSS:wxCURSOR_ARROW));}
+    void insertArrivalWaypoint(Vec3 position);
+    void linkTransition();
+    void openTransitionModule(const neomdl::GameResourceSession& base,const neomdl::ModuleScope& scope);
+    void setTransitionTarget(const Placement& exit,const std::string& module,const std::string& tag,
+        const std::optional<std::string>& label);
     bool dropObject(wxPoint point);
     void insertObject(Vec3 position,const ObjectPlacementOptions& options,const std::vector<Vec3>& polygon={});
     std::string importTemplate(neoshared::ResourceDocument source,const neomdl::ResourceResolver& resolver);
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
     bool importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver);
     void requestPreview() {
+        placingArrival_=false;
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
         ++revision_;cancel_->store(true);
@@ -561,7 +591,7 @@ private:
     void mapOwners();
     bool saveResources();
     bool saveArchive();
-    bool packageModule();
+    bool packageModule(const std::string& outputName);
     neomdl::ResourceResolver moduleResources() const;
     Resource& openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver);
     void editBlueprint();
@@ -588,13 +618,18 @@ private:
         editMenu_->SetLabel(ID_ModuleRedo,wxui::toWx(redo?"Redo "+history_[historyIndex_+1].action+"\tCtrl+Y":"Redo\tCtrl+Y"));
         if(blueprintEditor_)blueprintEditor_->setHistory(undo,redo);
         gizmoTool_->Enable(editing&&loaded);
-        objects_->Enable(!busy);areas_->Enable(!busy);gameChoice_->Enable(loaded&&!busy);fields_->Enable(!busy);palette_->Enable(!busy);
+        objects_->Enable(!busy);areas_->Enable(!busy&&!transitionDestination_);gameChoice_->Enable(loaded&&!busy&&!transitionDestination_);fields_->Enable(!busy);palette_->Enable(!busy);
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         moduleControls_->Enable(loaded&&!busy);
         cameraControls_->Enable(loaded&&!busy);cameraControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
+        const bool transition=selected&&(placements_[objects_->GetSelection()].list=="Door List"||placements_[objects_->GetSelection()].list=="TriggerList")&&editing&&!transitionDestination_;
+        enableModuleCommand(ID_LinkTransition,transition);FindWindow(ID_LinkTransition)->Enable(transition);
+        const bool arrival=canPlaceArrival()&&editing;
+        enableModuleCommand(ID_PlaceArrival,arrival);FindWindow(ID_PlaceArrival)->Enable(arrival);
+        FindWindow(ID_PlaceArrival)->SetLabel(placingArrival_?"Cancel arrival placement":"Place arrival waypoint");
         bool blueprint=false;
         if(selected) {
             const auto& p=placements_[objects_->GetSelection()];const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
@@ -635,6 +670,9 @@ private:
             }
             case ID_ModuleAssets:chooseAssets();return;
             case ID_AddObject:objectTabs_->SetSelection(1);return;
+            case ID_PlaceArrival:
+                placingArrival_=!placingArrival_;palette_->stopPlacing();canvas_->cancelAreaGizmo();updateActions();return;
+            case ID_LinkTransition:linkTransition();return;
             case ID_ModuleUndo:restoreEdit(historyIndex_-1);return;
             case ID_ModuleRedo:restoreEdit(historyIndex_+1);return;
             case ID_RedrawTrigger:beginTriggerDrawing(false);return;
@@ -643,7 +681,7 @@ private:
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
-            case ID_PackageModule:packageModule();return;
+            case ID_PackageModule:packageModule(moduleName_);return;
             case ID_EditBlueprint:editBlueprint();return;
             case ID_FrameArea:canvas_->frameModel();return;
             case ID_FrameObject:canvas_->framePosition(placements_.at(objects_->GetSelection()).position,5.0f);return;
@@ -678,6 +716,8 @@ private:
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
     bool drawingNewTrigger_{};
+    bool transitionDestination_{},placingArrival_{};
+    std::function<void()> transitionChanged_;
     std::unique_ptr<wxMenuBar> fieldMenus_;
     std::map<Key,Resource> resources_;
     std::map<Key,ResourceDocument> addedTemplates_;
@@ -794,7 +834,7 @@ void ModuleEditor::editBlueprint() {
         };
         actions.itemFields=[this](const std::string& name,std::uint16_t type){auto resolver=moduleResources();openBlueprintResource(resolver(name,type).value(),resolver);blueprintEditor_->Hide();fields_->SetFocus();};
         actions.fields=[this]{fields_->activateResource(resources_.at(blueprintKey_).source.identity);fields_->refreshActiveDocument();fields_->SetFocus();};
-        actions.save=[this]{saveResources();};actions.package=[this]{packageModule();};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
+        actions.save=[this]{saveResources();};actions.package=[this]{packageModule(moduleName_);};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
         blueprintEditor_=new BlueprintEditor(this,std::move(actions));
     }
     blueprintEditor_->open(kind.type,game_,resource.source.fileName,*resource.model->gff().root(),moduleResources(),session_,catalog_,localDirectory_);
@@ -1131,6 +1171,7 @@ void ModuleEditor::selectObject(int index,bool selectField) {
         objectSource_->Wrap(FromDIP(195));
     }
     updateActions();
+    if(transitionChanged_)transitionChanged_();
 }
 
 void ModuleEditor::applyTransform() {
@@ -1365,6 +1406,241 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position.x)+", "+decimal(position.y)+", "+decimal(position.z)));
 }
 
+void ModuleEditor::insertArrivalWaypoint(Vec3 position) {
+    rememberSelection();
+    auto& resource=resources_.at({areaName(),kGit});auto& root=*resource.model->gff().root();
+    if(!root.GetFieldByLabel("WaypointList"))root.AddField(std::make_unique<neogff::GffList>("WaypointList"));
+    auto& list=static_cast<neogff::GffList&>(*root.GetFieldByLabel("WaypointList"));
+    std::set<std::string> tags;
+    for(const auto& [key,value]:resources_)if(key.second==kGit)
+        if(const auto* waypoints=static_cast<const neogff::GffList*>(value.model->gff().root()->GetFieldByLabel("WaypointList")))
+            for(const auto& waypoint:waypoints->allStructs())tags.insert(waypoint->GetFieldByLabel("Tag")->GetString());
+    std::size_t number=1;std::string tag;
+    do {tag="neo_arrival_"+std::to_string(number++);}while(tags.count(tag));
+    auto waypoint=std::make_unique<neogff::GffStruct>();waypoint->typeid_=5;
+    waypoint->AddField(std::make_unique<neogff::GffExoStringField>("Tag",tag));
+    waypoint->AddField(std::make_unique<neogff::GffLocalizedStringField>("LocalizedName",0xffffffffu));
+    waypoint->AddField(std::make_unique<neogff::GffByteField>("HasMapNote",0));
+    for(const auto& [name,value]:std::array<std::pair<const char*,float>,6>{{
+        {"XPosition",position.x},{"YPosition",position.y},{"ZPosition",position.z},
+        {"XOrientation",0.0f},{"YOrientation",1.0f},{"ZOrientation",0.0f}}})
+        waypoint->AddField(std::make_unique<neogff::GffFloatField>(name,value));
+    selectedPath_="WaypointList\\"+std::to_string(list.count());list.AddStruct(std::move(waypoint));
+    resource.model->gff().dirty(true);stage(resource);fields_->activateResource(resource.source.identity);
+    fields_->refreshActiveDocument();rebuildObjects();selectObject(findPlacement(selectedPath_),true);
+    recordEdit("Place arrival waypoint");requestPreview();
+    setModuleStatusText("Placed "+wxui::toWx(tag)+". Use Move and Rotate to set its arrival position and facing.");
+}
+
+void ModuleEditor::openTransitionModule(const neomdl::GameResourceSession& base,const neomdl::ModuleScope& scope) {
+    auto session=std::make_shared<neomdl::GameResourceSession>();std::string error;
+    if(!session->openModule(base,scope,error))throw std::runtime_error(error);
+    auto ifo=session->resolve("module",kIfo).value();
+    neogff::GffFile file;file.LoadBytes(ifo.bytes);
+    const auto& list=static_cast<const neogff::GffList&>(*file.root()->GetFieldByLabel("Mod_Area_list"));
+    const auto area=list.GetStruct(0)->GetFieldByLabel("Area_Name")->GetString();
+    std::map<Key,Resource> resources;resources.emplace(Key{"module",kIfo},Resource{std::move(ifo),{}});
+    for(const auto type:{kAre,kGit}) {
+        auto source=session->resolve(area,type).value();resources.emplace(Key{neomdl::resourceKey(area),type},Resource{std::move(source),{}});
+    }
+    archivePath_.clear();localDirectory_.clear();catalog_=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
+    archiveResources_=neomdl::archiveResources(catalog_);
+    moduleName_=scope.name;hostResources_=session->resolver();install_=*session->installation();session_=std::move(session);
+    previewEnabled_=true;installResources(std::move(resources),"Destination module: "+moduleName_);requestPreview();
+}
+
+void ModuleEditor::setTransitionTarget(const Placement& exit,const std::string& module,const std::string& tag,
+    const std::optional<std::string>& label) {
+    rememberSelection();
+    auto& resource=resources_.at(identityKeys_.at(exit.identity));auto& root=*resource.model->gff().root();
+    auto& list=static_cast<neogff::GffList&>(*root.GetFieldByLabel(exit.list));
+    auto copy=list.GetStruct(exit.index)->Clone();auto& record=static_cast<neogff::GffStruct&>(*copy);
+    if(exit.list=="TriggerList") {
+        const auto* templates=static_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+        if(templates&&templates->value) {
+            const auto original=neomdl::resourceKey(record.GetFieldByLabel("TemplateResRef")->GetString());
+            auto resolver=moduleResources();auto source=resolver(original,2032).value();
+            neogff::GffFile blueprint;blueprint.LoadBytes(source.bytes);
+            const auto* type=blueprint.root()->GetFieldByLabel("Type");
+            if(!type||type->GetString()!="1") {
+                setField(*blueprint.root(),std::make_unique<neogff::GffIntField>("Type",1));
+                std::size_t number=1;std::string name;
+                do {
+                    const auto suffix="_tr"+std::to_string(number++);name=original.substr(0,16-suffix.size())+suffix;
+                }while(resolver(name,2032));
+                source.fileName=name+".utt";source.identity+="#transition:"+name;source.bytes=blueprint.SaveBytes();
+                addedTemplates_.emplace(Key{name,2032},std::move(source));templateOrigins_[{name,2032}]=std::move(resolver);templatesDirty_=true;
+                setField(record,std::make_unique<neogff::GffResRefField>("TemplateResRef",name));
+            }
+        } else setField(record,std::make_unique<neogff::GffIntField>("Type",1));
+    }
+    setField(record,std::make_unique<neogff::GffResRefField>("LinkedToModule",module));
+    setField(record,std::make_unique<neogff::GffExoStringField>("LinkedTo",tag));
+    setField(record,std::make_unique<neogff::GffByteField>("LinkedToFlags",2));
+    if(label) {
+        auto* text=static_cast<neogff::GffLocalizedStringField*>(record.GetFieldByLabel("TransitionDestin"));
+        if(!text) {
+            auto value=std::make_unique<neogff::GffLocalizedStringField>("TransitionDestin",0xffffffffu);
+            text=value.get();record.AddField(std::move(value));
+        }
+        text->SetStringByID(0,*label);
+    }
+    list.allStructs().at(exit.index).reset(static_cast<neogff::GffStruct*>(copy.release()));
+    resource.model->gff().dirty(true);stage(resource);fields_->activateResource(resource.source.identity);
+    fields_->refreshActiveDocument();selectedPath_=exit.path;rebuildObjects();recordEdit("Link transition");requestPreview();
+}
+
+void ModuleEditor::linkTransition() {
+    const auto exit=placements_.at(objects_->GetSelection());
+    const auto& root=*resources_.at(identityKeys_.at(exit.identity)).model->gff().root();
+    const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(exit.list)).GetStruct(exit.index);
+    const auto* linked=record.GetFieldByLabel("LinkedTo");const auto* text=static_cast<const neogff::GffLocalizedStringField*>(record.GetFieldByLabel("TransitionDestin"));
+    wxDialog dialog(this,wxID_ANY,"Link module transition",wxDefaultPosition,FromDIP(wxSize(1220,850)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER|wxMAXIMIZE_BOX);
+    auto* box=new wxBoxSizer(wxVERTICAL);
+    box->Add(new wxStaticText(&dialog,wxID_ANY,"Source exit: "+wxui::toWx(exit.label)),0,wxEXPAND|wxALL,6);
+    auto* names=new wxBoxSizer(wxHORIZONTAL);
+    names->Add(new wxStaticText(&dialog,wxID_ANY,"Source module"),0,wxALIGN_CENTER_VERTICAL|wxALL,4);
+    auto* sourceName=new wxTextCtrl(&dialog,wxID_ANY,wxui::toWx(moduleName_));sourceName->SetMaxLength(16);names->Add(sourceName,1,wxALL,4);
+    sourceName->SetToolTip("Module resource name without an extension. The return connection uses this name.");
+    names->Add(new wxStaticText(&dialog,wxID_ANY,"Destination module"),0,wxALIGN_CENTER_VERTICAL|wxALL,4);
+    auto* destinationName=new wxTextCtrl(&dialog,wxID_ANY);destinationName->SetMaxLength(16);names->Add(destinationName,1,wxALL,4);
+    destinationName->SetToolTip("Module resource name without an extension. Package the destination as this name plus .mod.");
+    box->Add(names,0,wxEXPAND);
+    auto* picker=new wxBoxSizer(wxHORIZONTAL);
+    auto* gameFolder=new wxButton(&dialog,wxID_ANY,"Choose game folder...");picker->Add(gameFolder,0,wxALL,4);
+    auto* modules=new wxChoice(&dialog,wxID_ANY);picker->Add(modules,1,wxALL,4);
+    auto* browse=new wxButton(&dialog,wxID_ANY,"Open custom module...");picker->Add(browse,0,wxALL,4);box->Add(picker,0,wxEXPAND);
+    auto* links=new wxFlexGridSizer(2,6,6);links->AddGrowableCol(1);
+    links->Add(new wxStaticText(&dialog,wxID_ANY,"Arrival"),0,wxALIGN_CENTER_VERTICAL);
+    auto* arrivals=new wxChoice(&dialog,wxID_ANY);links->Add(arrivals,1,wxEXPAND);
+    links->Add(new wxStaticText(&dialog,wxID_ANY,"Destination label (English)"),0,wxALIGN_CENTER_VERTICAL);
+    auto* label=new wxTextCtrl(&dialog,wxID_ANY,text?wxui::toWx(text->GetStringById(0)):wxString{});links->Add(label,1,wxEXPAND);
+    links->Add(new wxStaticText(&dialog,wxID_ANY,"Return exit"),0,wxALIGN_CENTER_VERTICAL);
+    auto* returnExit=new wxChoice(&dialog,wxID_ANY);links->Add(returnExit,1,wxEXPAND);
+    links->Add(new wxStaticText(&dialog,wxID_ANY,"Return arrival in source module"),0,wxALIGN_CENTER_VERTICAL);
+    auto* returnArrival=new wxChoice(&dialog,wxID_ANY);links->Add(returnArrival,1,wxEXPAND);
+    box->Add(links,0,wxEXPAND|wxALL,6);
+    auto context=context_;context.titleChanged={};context.closeRequested={};
+    auto* destination=new ModuleEditor(&dialog,std::move(context),true);
+    destination->game_=game_;destination->gameChoice_->SetSelection(gameChoice_->GetSelection());
+    box->Add(destination,1,wxEXPAND|wxALL,4);
+    auto* hint=new wxStaticText(&dialog,wxID_ANY,
+        "Select an arrival waypoint or return exit in the destination view. Place arrival waypoint creates a marker you can move and rotate. "
+        "Module entry uses the existing IFO spawn. Save each module as the name shown above, with a .mod extension. Each module has its own undo history.");
+    hint->Wrap(FromDIP(1160));box->Add(hint,0,wxEXPAND|wxALL,6);
+    auto* buttons=new wxWrapSizer(wxHORIZONTAL);
+    auto* apply=new wxButton(&dialog,wxID_ANY,"Apply links");buttons->Add(apply,0,wxALL,4);
+    std::array<wxButton*,4> saves;
+    const char* saveLabels[]={"Save source resources...","Save destination resources...","Package source MOD...","Package destination MOD..."};
+    for(std::size_t i=0;i<saves.size();++i) {saves[i]=new wxButton(&dialog,wxID_ANY,saveLabels[i]);buttons->Add(saves[i],0,wxALL,4);}
+    auto* close=new wxButton(&dialog,wxID_CLOSE,"Close");buttons->Add(close,0,wxALL,4);box->Add(buttons,0,wxEXPAND);
+    dialog.SetSizer(box);dialog.SetEscapeId(wxID_CLOSE);destination->setAppearance(dark_,scale_);wxui::applyTheme(&dialog,dark_);
+
+    const auto waypointTag=[](const ModuleEditor& editor,const Placement& waypoint) {
+        const auto& root=*editor.resources_.at(editor.identityKeys_.at(waypoint.identity)).model->gff().root();
+        return static_cast<const neogff::GffList&>(*root.GetFieldByLabel("WaypointList")).GetStruct(waypoint.index)->GetFieldByLabel("Tag")->GetString();
+    };
+    std::vector<Placement> sourceArrivals,destinationArrivals,destinationExits;
+    returnArrival->Append("Module entry point");returnArrival->SetSelection(0);
+    for(const auto& p:placements_)if(p.list=="WaypointList") {sourceArrivals.push_back(p);returnArrival->Append(wxui::toWx(waypointTag(*this,p)));}
+    std::string arrivalTag=linked?linked->GetString():std::string{},returnPath;
+    const auto refresh=[&] {
+        const auto selected=destination->objects_->GetSelection();
+        if(selected!=wxNOT_FOUND) {
+            const auto& p=destination->placements_.at(selected);
+            if(p.list=="WaypointList")arrivalTag=waypointTag(*destination,p);
+            else if(p.list=="Door List"||p.list=="TriggerList")returnPath=p.path;
+        }
+        arrivals->Clear();arrivals->Append("Module entry point");arrivals->SetSelection(0);destinationArrivals.clear();
+        returnExit->Clear();returnExit->Append("No return connection");returnExit->SetSelection(0);destinationExits.clear();
+        for(const auto& p:destination->placements_) {
+            if(p.list=="WaypointList") {
+                const auto tag=waypointTag(*destination,p);destinationArrivals.push_back(p);arrivals->Append(wxui::toWx(tag));
+                if(tag==arrivalTag)arrivals->SetSelection(int(destinationArrivals.size()));
+            } else if(p.list=="Door List"||p.list=="TriggerList") {
+                destinationExits.push_back(p);returnExit->Append(wxui::toWx(p.label));
+                if(p.path==returnPath)returnExit->SetSelection(int(destinationExits.size()));
+            }
+        }
+        const bool loaded=!destination->resources_.empty();apply->Enable(loaded);arrivals->Enable(loaded);returnExit->Enable(loaded);
+        saves[1]->Enable(loaded);saves[3]->Enable(loaded);returnArrival->Enable(!returnPath.empty());
+    };
+    destination->transitionChanged_=refresh;
+    arrivals->Bind(wxEVT_CHOICE,[&](wxCommandEvent&){
+        const auto index=arrivals->GetSelection();arrivalTag=index==0?std::string{}:waypointTag(*destination,destinationArrivals.at(index-1));
+        destination->selectObject(destination->findPlacement(index==0?"$entry":destinationArrivals.at(index-1).path),true);
+    });
+    returnExit->Bind(wxEVT_CHOICE,[&](wxCommandEvent&){
+        const auto index=returnExit->GetSelection();returnPath=index==0?std::string{}:destinationExits.at(index-1).path;
+        returnArrival->Enable(index>0);
+        destination->selectObject(index==0?wxNOT_FOUND:destination->findPlacement(returnPath),index>0);
+    });
+    std::shared_ptr<neomdl::GameResourceSession> base=session_;
+    std::vector<neomdl::ModuleScope> scopes;
+    const auto listModules=[&] {
+        modules->Clear();scopes.clear();
+        if(base)for(const auto& scope:base->modules())if(scope.name!=moduleName_) {scopes.push_back(scope);modules->Append(wxui::toWx(scope.name));}
+        modules->Enable(!scopes.empty());
+    };
+    listModules();refresh();
+    gameFolder->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){
+        try {
+            wxDirDialog choose(&dialog,"Choose the source game's installation",install_?neosettings::pathToWx(install_->installPath):wxString{},wxDD_DIR_MUST_EXIST);
+            if(choose.ShowModal()!=wxID_OK)return;
+            const auto id=game_==neomdl::model::GameVersion::Kotor1?neoshared::game::GameId::Kotor1:neoshared::game::GameId::Kotor2;
+            const auto installation=neoshared::game::inspectGameInstallation(neosettings::pathFromWx(choose.GetPath()),id).value();
+            auto next=std::make_shared<neomdl::GameResourceSession>();std::string error;
+            if(!next->open(installation,error))throw std::runtime_error(error);
+            base=std::move(next);listModules();
+            if(!destination->resources_.empty()&&!destination->session_) {
+                destination->hostResources_=base->installationResolver();destination->requestPreview();
+            }
+        } catch(const std::exception& e) {wxui::showError(&dialog,e);}
+    });
+    modules->Bind(wxEVT_CHOICE,[&](wxCommandEvent&){
+        try {
+            if(!destination->canClose())return;
+            const auto scope=scopes.at(modules->GetSelection());returnPath.clear();
+            destination->openTransitionModule(*base,scope);destinationName->ChangeValue(wxui::toWx(scope.name));refresh();
+        } catch(const std::exception& e) {wxui::showError(&dialog,e);}
+    });
+    browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){
+        try {
+            wxFileDialog choose(&dialog,"Open destination module",{},{},"Module archives and resources|*.mod;*.MOD;*.rim;*.RIM;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            if(choose.ShowModal()!=wxID_OK)return;
+            if(!destination->openFile(neosettings::pathFromWx(choose.GetPath())))return;
+            returnPath.clear();modules->SetSelection(wxNOT_FOUND);destinationName->ChangeValue(wxui::toWx(destination->moduleName_));
+            if(base)destination->hostResources_=base->installationResolver();
+            destination->previewEnabled_=true;destination->requestPreview();refresh();
+        } catch(const std::exception& e) {wxui::showError(&dialog,e);}
+    });
+    apply->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){
+        try {
+            const auto targetName=neomdl::resourceKey(wxui::toStd(destinationName->GetValue()));
+            const auto originName=neomdl::resourceKey(wxui::toStd(sourceName->GetValue()));
+            const auto targetTag=arrivals->GetSelection()==0?std::string{}:waypointTag(*destination,destinationArrivals.at(arrivals->GetSelection()-1));
+            const auto originTag=returnArrival->GetSelection()==0?std::string{}:waypointTag(*this,sourceArrivals.at(returnArrival->GetSelection()-1));
+            std::optional<Placement> back;
+            if(returnExit->GetSelection()>0)back=destinationExits.at(returnExit->GetSelection()-1);
+            std::optional<std::string> name;if(label->IsModified())name=wxui::toStd(label->GetValue());
+            setTransitionTarget(exit,targetName,targetTag,name);
+            if(back)destination->setTransitionTarget(*back,originName,originTag,std::nullopt);
+            label->DiscardEdits();
+            hint->SetLabel("Links applied. Save or package the affected modules separately. Undo is available in each module's own history.");dialog.Layout();
+        } catch(const std::exception& e) {wxui::showError(&dialog,e);}
+    });
+    for(std::size_t i=0;i<saves.size();++i)saves[i]->Bind(wxEVT_BUTTON,[&,i](wxCommandEvent&){
+        try {
+            auto* editor=i%2==0?this:destination;
+            if(i<2)editor->saveResources();
+            else editor->packageModule(wxui::toStd((i==2?sourceName:destinationName)->GetValue()));
+        } catch(const std::exception& e) {wxui::showError(&dialog,e);}
+    });
+    close->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){if(destination->canClose())dialog.EndModal(wxID_CLOSE);});
+    dialog.Bind(wxEVT_CLOSE_WINDOW,[&](wxCloseEvent& event){if(destination->canClose())dialog.EndModal(wxID_CLOSE);else event.Veto();});
+    dialog.ShowModal();destination->transitionChanged_={};
+}
+
 void ModuleEditor::chooseAssets() {
     wxDialog dialog(this,wxID_ANY,"Module game resources");
     auto* root=new wxBoxSizer(wxVERTICAL);
@@ -1523,7 +1799,7 @@ bool ModuleEditor::saveArchive() {
     archive.save(path);saved();setModuleStatusText("Saved module archive copy: "+neosettings::pathToWx(path));return true;
 }
 
-bool ModuleEditor::packageModule() {
+bool ModuleEditor::packageModule(const std::string& outputName) {
     std::vector<std::filesystem::path> archives;
     const auto addArchive=[&](const std::filesystem::path& path) {
         if(std::find(archives.begin(),archives.end(),path)==archives.end())archives.push_back(path);
@@ -1560,7 +1836,7 @@ bool ModuleEditor::packageModule() {
     auto* box=new wxBoxSizer(wxVERTICAL);box->Add(new wxTextCtrl(&review,wxID_ANY,wxui::toWx(package.report),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);
     box->Add(review.CreateButtonSizer(wxOK|wxCANCEL),0,wxALIGN_RIGHT|wxALL,8);review.SetSizer(box);wxui::applyTheme(&review,dark_);
     static_cast<wxButton*>(review.FindWindow(wxID_OK))->SetLabel("Save MOD...");if(review.ShowModal()!=wxID_OK)return false;
-    wxFileDialog dialog(this,"Save combined module",{},wxui::toWx(moduleName_+".mod"),"Module archive (*.mod)|*.mod",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+    wxFileDialog dialog(this,"Save combined module",{},wxui::toWx(outputName+".mod"),"Module archive (*.mod)|*.mod",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto path=neosettings::pathFromWx(dialog.GetPath());auto protectedInputs=inputs_;
     protectedInputs.insert(protectedInputs.end(),sources->archives.begin(),sources->archives.end());
