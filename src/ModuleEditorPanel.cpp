@@ -1489,7 +1489,7 @@ bool ModuleEditor::saveResources() {
     for(const auto& [key,source]:addedTemplates_)exports.push_back(&source);
     for(const auto* source:exports) {
         const auto destination=directory/neoshared::pathFromUtf8(source->fileName);
-        validateHostOutput(destination);neoshared::checkResourceOutput(destination,inputs_);
+        validateHostOutput(destination,inputs_);
     }
     const bool overwrite=std::any_of(exports.begin(),exports.end(),[&](const auto* source){return std::filesystem::exists(directory/neoshared::pathFromUtf8(source->fileName));});
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
@@ -1504,7 +1504,7 @@ bool ModuleEditor::saveArchive() {
         "Module archive (*"+wxui::toWx(ext)+")|*"+wxui::toWx(ext),wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto path=neosettings::pathFromWx(dialog.GetPath());
-    validateHostOutput(path);neoshared::checkResourceOutput(path,inputs_);
+    validateHostOutput(path,inputs_);
     neoshared::erf::ErfArchive archive(archivePath_);
     for(auto& [key,resource]:resources_) {
         if(!editableResource(key.second))continue;
@@ -1557,7 +1557,7 @@ bool ModuleEditor::packageModule() {
     protectedInputs.insert(protectedInputs.end(),sources->archives.begin(),sources->archives.end());
     protectedInputs.insert(protectedInputs.end(),sources->extraFiles.begin(),sources->extraFiles.end());
     for(const auto& [key,source]:package.resources)protectedInputs.insert(protectedInputs.end(),source.protectedInputs.begin(),source.protectedInputs.end());
-    validateHostOutput(path);neoshared::checkResourceOutput(path,protectedInputs);
+    validateHostOutput(path,protectedInputs);
     const auto directory=staging_/"package";std::filesystem::create_directory(directory);
     neoshared::erf::ErfArchive archive;archive.new_archive(path,neoshared::erf::ArchiveType::MOD);
     {
