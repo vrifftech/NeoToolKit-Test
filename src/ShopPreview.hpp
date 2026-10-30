@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ModelDocument.hpp"
+#include <GuiRenderer.hpp>
 #include <gff/GFFFile.hpp>
 #include <neotlk/TlkLookup.hpp>
 #include <wx/panel.h>
@@ -24,11 +25,8 @@ public:
     bool loaded() const {return bool(textures_);}
     std::string sources() const;
 private:
-    struct Font {double height{},width{},spacing{},lineSpacing{};std::vector<wxPoint2DDouble> upper,lower;};
     struct Item {std::size_t source{};std::string name,description,icon;unsigned stack{};int group{};bool infinite{},plot{};};
     const neoshared::texture::TextureData& texture(const std::string& name);
-    Font& font(const std::string& name);
-    void cacheControl(const neogff::GffStruct& control);
     void stamp(wxGraphicsContext& dc,const std::string& name,const wxRect2DDouble& rect,const neomdl::model::Vec3& color,double alpha=1,int turn=0,bool flipX=false,bool flipY=false);
     wxRect2DDouble borderInner(const neogff::GffStruct& record,const std::string& field,wxRect2DDouble rect);
     wxRect2DDouble border(wxGraphicsContext& dc,const neogff::GffStruct& record,const std::string& field,wxRect2DDouble rect,std::optional<neomdl::model::Vec3> tint={});
@@ -39,8 +37,7 @@ private:
     neomdl::ResourceResolver resolver_;
     neogff::GffFile layout_;
     neotlk::TlkLookup tlk_;
-    std::map<std::string,Font> fonts_;
-    std::map<std::string,wxBitmap> bitmaps_;
+    neogui::GuiRenderer renderer_;
     std::vector<Item> items_;
     std::vector<std::pair<wxRect2DDouble,std::size_t>> hits_;
     std::vector<std::string> sources_;

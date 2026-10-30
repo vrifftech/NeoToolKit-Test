@@ -11,9 +11,9 @@
 #include <vector>
 namespace neotoolkit {
 enum class EditorKind : std::size_t {
-    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives, Modules
+    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives, Modules, Gui
 };
-inline constexpr std::size_t kEditorCount=10;
+inline constexpr std::size_t kEditorCount=11;
 struct EditorChoice { EditorKind kind; std::string id; std::string label; };
 inline std::string editorExtensionForPath(const std::filesystem::path& path) {
     return neomdl::asciiModelSuffix(path) ? ".mdl" : neoshared::pathToUtf8(path.extension());
@@ -33,6 +33,8 @@ inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     if(ext==".tpc"||ext==".txb"||ext==".tga"||ext==".dds"||ext==".png"||
        ext==".jpg"||ext==".jpeg"||ext==".jpe"||ext==".bmp"||ext==".txi")
         return {{EditorKind::Textures,"neotpc","Open with NeoTPC"}};
+    if(ext==".gui")return {{EditorKind::Gui,"neogui","Open with NeoGUI"},
+                           {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(ext==".dlg")return {{EditorKind::Dialogues,"neodlg","Open with NeoDLG"},
                            {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(ext==".jrl")return {{EditorKind::Journals,"neojrl","Open with NeoJRL"},

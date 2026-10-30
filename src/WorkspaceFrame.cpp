@@ -27,7 +27,7 @@ void stripAccelerators(wxMenu& menu) {
 }
 constexpr const char* kEditorPageTitles[kEditorCount]={
     "2DA tables","Soundsets","Talk tables","GFF resources",
-    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor"
+    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor","GUI layouts"
 };
 std::string resourceExtension(const neoshared::ResourceDocument& resource) {
     return editorExtensionForPath(neoshared::pathFromUtf8(resource.fileName));
@@ -45,7 +45,7 @@ void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
     }
 }
 }
-std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_};}
+std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -154,7 +154,7 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
-            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
+            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gui;*.GUI;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
         if(path)openPath(*path);
     },ID_Open);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
@@ -163,7 +163,7 @@ void WorkspaceFrame::buildMenus() {
         if(dialog.ShowModal()==wxID_OK)openPath(neosettings::pathFromWx(dialog.GetPath()),"module");
     },ID_OpenLiveModule);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){wxMessageBox(
-        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL, NeoMDL, NeoTPC and NeoERF panels.",
+        "NeoToolKit Test " NEOTOOLKIT_VERSION "\n\nNeoBIF browser with Neo2DA, NeoSSF, NeoTLK, NeoGFF, NeoDLG, NeoJRL, NeoMDL, NeoTPC, NeoERF and NeoGUI panels.",
         "About NeoToolKit Test",wxOK|wxICON_INFORMATION,this);},ID_About);
     Bind(wxEVT_MENU,[this](wxCommandEvent& event){dark_=event.IsChecked();wxui::writeDarkMode("NeoToolKit-Test",dark_);applyAppearance();},ID_Dark);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontLarger);
@@ -184,7 +184,7 @@ void WorkspaceFrame::captureEditorMenus(std::size_t index) {
         // intentionally omitted while an editor workspace is active.
         if(label.CmpNoCase("Help")==0) {hiddenMenus_[index].emplace_back(menu);continue;}
         if(label=="File") {
-            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module"};
+            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module","GUI layout"};
             label=titles[index];
         }
         // All editors' own open remains available; host's Ctrl+O handles all types.
@@ -235,6 +235,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Journals:journals_=neojrl::ui::createEditorPanel(editors_,context);panel=journals_;break;
     case EditorKind::Models:models_=neomdl::ui::createModelEditorPanel(editors_,context);panel=models_;break;
     case EditorKind::Modules:modules_=createModuleEditorPanel(editors_,context);panel=modules_;break;
+    case EditorKind::Gui:guis_=neogui::ui::createEditorPanel(editors_,context);panel=guis_;break;
     case EditorKind::Textures:textures_=neotpc::ui::createEditorPanel(editors_,context);panel=textures_;break;
     case EditorKind::Archives:
         archives_=neoerf::ui::createEditorPanel(editors_,context);panel=archives_;
@@ -276,6 +277,7 @@ void WorkspaceFrame::destroyEditor(EditorKind kind) {
     case EditorKind::Textures:textures_=nullptr;break;
     case EditorKind::Archives:archives_=nullptr;break;
     case EditorKind::Modules:modules_=nullptr;break;
+    case EditorKind::Gui:guis_=nullptr;break;
     }
     panel->Hide();panel->Destroy();
 }
@@ -410,6 +412,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Soundsets:ok=soundsets_->openResource(std::move(resource));break;
     case EditorKind::TalkTables:ok=talkTables_->openResource(std::move(resource));break;
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
+    case EditorKind::Gui:ok=guis_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
     case EditorKind::Models:
@@ -444,6 +447,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
         case EditorKind::Soundsets:ok=soundsets_->openFile(path);break;
         case EditorKind::TalkTables:ok=talkTables_->openFile(path);break;
         case EditorKind::Gff:ok=structured_->openFile(path);break;
+        case EditorKind::Gui:ok=guis_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
         case EditorKind::Models:

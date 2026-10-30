@@ -197,6 +197,21 @@
           "contains": "ERFEditorPanel"
         }
       ]
+    },
+    {
+      "key": "NEOGUI",
+      "folder": "NeoGUI",
+      "repository": "https://github.com/vrifftech/NeoGUI",
+      "required": [
+        {
+          "file": "CMakeLists.txt",
+          "contains": "neogui::wx"
+        },
+        {
+          "file": "src/wx/GUIEditorPanel.hpp",
+          "contains": "createEditorPanel"
+        }
+      ]
     }
   ]
 }
