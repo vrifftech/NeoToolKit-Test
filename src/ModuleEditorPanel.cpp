@@ -8,6 +8,8 @@
 #include "wx/GFFEditorPanel.hpp"
 #include "wx/ModelCanvas.hpp"
 #include "core/GameResourceSession.hpp"
+#include "core/Engine2DA.hpp"
+#include <twoda/TwoDAFile.hpp>
 #include "NeoViewState.hpp"
 #include <neoshared/bif/LooseArchiveCatalog.hpp>
 #include <neoshared/erf/Archive.hpp>
@@ -18,6 +20,7 @@
 #include <wx/notebook.h>
 #include <wx/progdlg.h>
 #include <wx/splitter.h>
+#include <wx/scrolwin.h>
 #include <wx/timer.h>
 #include <wx/wrapsizer.h>
 #include <wx/wx.h>
@@ -37,7 +40,7 @@ using neomdl::model::Vec3;
 using Clock=std::chrono::steady_clock;
 using Key=std::pair<std::string,std::uint16_t>;
 using ByteSnapshot=std::shared_ptr<const std::vector<std::uint8_t>>;
-constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023;
+constexpr std::uint16_t kAre=2012,kIfo=2014,kGit=2023,kWok=2016;
 constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
@@ -81,6 +84,7 @@ struct Preview {
 };
 struct EditState {
     std::map<Key,ByteSnapshot> bytes;
+    std::map<Key,ByteSnapshot> walkmeshes;
     std::map<Key,ResourceDocument> templates;
     std::map<std::string,std::string> imports;
     std::map<Key,neomdl::ResourceResolver> origins;
@@ -180,6 +184,29 @@ public:
         cameraActions.preview=[this](std::optional<neomdl::AreaCameraRecord> camera){previewCamera(std::move(camera));};
         cameraActions.edit=[this](const neomdl::AreaCameraRecord& camera){editCamera(camera);};
         cameraControls_=new CameraControls(objectTabs_,std::move(cameraActions));objectTabs_->AddPage(cameraControls_,"Cameras");
+        walkmeshPage_=new wxScrolledWindow(objectTabs_);walkmeshPage_->SetScrollRate(0,FromDIP(10));auto* walkmeshBox=new wxBoxSizer(wxVERTICAL);
+        showWalkmesh_=new wxCheckBox(walkmeshPage_,wxID_ANY,"Show walkmesh");showWalkmesh_->SetValue(true);
+        xrayWalkmesh_=new wxCheckBox(walkmeshPage_,wxID_ANY,"Show through room geometry");
+        walkmeshBox->Add(showWalkmesh_,0,wxALL,5);walkmeshBox->Add(xrayWalkmesh_,0,wxALL,5);
+        walkmeshBox->Add(new wxStaticText(walkmeshPage_,wxID_ANY,"Room"),0,wxALL,5);
+        walkmeshRooms_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshRooms_->Append("All rooms");walkmeshRooms_->SetSelection(0);
+        walkmeshBox->Add(walkmeshRooms_,0,wxEXPAND|wxALL,5);
+        walkmeshTool_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshTool_->Append("Select faces");walkmeshTool_->Append("Paint faces");walkmeshTool_->SetSelection(0);
+        walkmeshBox->Add(walkmeshTool_,0,wxEXPAND|wxALL,5);
+        walkmeshBox->Add(new wxStaticText(walkmeshPage_,wxID_ANY,"Paint material"),0,wxALL,5);
+        walkmeshMaterial_=new wxChoice(walkmeshPage_,wxID_ANY);walkmeshBox->Add(walkmeshMaterial_,0,wxEXPAND|wxALL,5);
+        walkmeshSwatch_=new wxPanel(walkmeshPage_,wxID_ANY,wxDefaultPosition,FromDIP(wxSize(-1,12)));walkmeshBox->Add(walkmeshSwatch_,0,wxEXPAND|wxALL,5);
+        walkmeshMaterialInfo_=new wxStaticText(walkmeshPage_,wxID_ANY,"Load game resources for surfacemat.2da.");walkmeshMaterialInfo_->Wrap(FromDIP(195));
+        walkmeshBox->Add(walkmeshMaterialInfo_,0,wxEXPAND|wxALL,5);
+        auto* selectionTools=new wxWrapSizer(wxHORIZONTAL);
+        applyWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Apply to selected");selectionTools->Add(applyWalkmesh_,0,wxALL,3);
+        sameWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Select matching");selectionTools->Add(sameWalkmesh_,0,wxALL,3);
+        auto* clearFaces=new wxButton(walkmeshPage_,wxID_ANY,"Clear selection");selectionTools->Add(clearFaces,0,wxALL,3);
+        walkmeshBox->Add(selectionTools,0,wxEXPAND);saveWalkmesh_=new wxButton(walkmeshPage_,wxID_ANY,"Save WOK...");walkmeshBox->Add(saveWalkmesh_,0,wxEXPAND|wxALL,5);
+        walkmeshInfo_=new wxStaticText(walkmeshPage_,wxID_ANY,"Load a 3D area to edit its walkmeshes.");walkmeshInfo_->Wrap(FromDIP(195));walkmeshBox->Add(walkmeshInfo_,0,wxEXPAND|wxALL,5);
+        auto* walkmeshHelp=new wxStaticText(walkmeshPage_,wxID_ANY,
+            "Click to select; Shift-click toggles. Drag a box to select face centers through geometry. Paint mode paints faces under the cursor. Alt-drag orbits, right-drag pans; Esc cancels a stroke.\n\nChoose a room for Save WOK. Save resources and Package MOD include all loaded walkmeshes.");
+        walkmeshHelp->Wrap(FromDIP(195));walkmeshBox->Add(walkmeshHelp,0,wxEXPAND|wxALL,5);walkmeshPage_->SetSizer(walkmeshBox);objectTabs_->AddPage(walkmeshPage_,"Walkmesh");
         sidebar->Add(objectTabs_,1,wxEXPAND|wxTOP,6);
         inspector->SetSizer(sidebar);
         split_=new wxSplitterWindow(outer_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -249,8 +276,35 @@ public:
         gridSnap_->Bind(wxEVT_CHOICE,snapping);rotationSnap_->Bind(wxEVT_CHOICE,snapping);walkmeshSnap_->Bind(wxEVT_CHECKBOX,snapping);
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
             if(event.GetSelection()!=1)palette_->stopPlacing();
+            if(objectTabs_->GetCurrentPage()==walkmeshPage_)cameraControls_->stopPreview();
+            placingArrival_=false;canvas_->cancelWalkmeshStroke();configureWalkmesh();updateActions();
             event.Skip();
         });
+        const auto walkmeshOptions=[this](wxCommandEvent&){configureWalkmesh();refreshWalkmeshInfo();};
+        showWalkmesh_->Bind(wxEVT_CHECKBOX,walkmeshOptions);xrayWalkmesh_->Bind(wxEVT_CHECKBOX,walkmeshOptions);
+        walkmeshRooms_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){canvas_->setWalkmeshSelection({});configureWalkmesh();refreshWalkmeshInfo();});
+        walkmeshTool_->Bind(wxEVT_CHOICE,walkmeshOptions);walkmeshMaterial_->Bind(wxEVT_CHOICE,walkmeshOptions);
+        canvas_->Bind(neomdl::ui::EVT_WALKMESH_EDIT,[this](neomdl::ui::WalkmeshEvent& event){
+            try {editWalkmesh(event);}catch(const std::exception& e){canvas_->cancelWalkmeshStroke();wxui::showError(this,e);}
+        });
+        applyWalkmesh_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
+            try {
+                paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();rememberSelection();
+                for(const auto& face:canvas_->selectedWalkmeshFaces())paintWalkmeshFace(face);
+                commitWalkmeshPaint();
+            }catch(const std::exception& e){restoreWalkmeshes();wxui::showError(this,e);}
+        });
+        sameWalkmesh_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
+            std::set<neomdl::ui::WalkmeshFace> faces;const auto material=walkmeshMaterial_->GetSelection();
+            for(const auto& layer:walkmeshLayers()) {
+                if(walkmeshRooms_->GetSelection()>0&&layer.room!=wxui::toStd(walkmeshRooms_->GetStringSelection()))continue;
+                for(std::size_t i=0;i<layer.mesh->faces.size();++i)
+                    if(layer.mesh->faces[i].material==std::uint32_t(material))faces.emplace(layer.room,std::uint32_t(i));
+            }
+            canvas_->setWalkmeshSelection(std::move(faces));refreshWalkmeshInfo();
+        });
+        clearFaces->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){canvas_->setWalkmeshSelection({});refreshWalkmeshInfo();});
+        saveWalkmesh_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {saveWalkmesh();}catch(const std::exception& e){wxui::showError(this,e);}});
         apply_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
             try {applyTransform();} catch(const std::exception& e) {wxui::showError(this,e);}
         });
@@ -315,6 +369,7 @@ public:
     }
     std::vector<std::filesystem::path> openPaths() const override {return inputs_;}
     bool canClose() override {
+        canvas_->cancelWalkmeshStroke();
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
         requested_=false;cancel_->store(true);
@@ -469,6 +524,7 @@ private:
         setModuleMenus(menus);
     }
     void installResources(std::map<Key,Resource> resources,const std::string& title) {
+        canvas_->setWalkmeshLayers({});walkmeshes_.clear();walkmeshSnapshots_.clear();surfaceIdentity_.clear();walkmeshMaterial_->Clear();walkmeshTool_->SetSelection(0);
         placingArrival_=false;
         if(blueprintEditor_)blueprintEditor_->clear();
         cameraControls_->stopPreview();cameraControls_->load(nullptr,game_==neomdl::model::GameVersion::Kotor2);
@@ -495,7 +551,7 @@ private:
         canvas_->setDocument(document.get());document_=std::move(document);
         sourceTitle_=title;
         history_.clear();historyIndex_=0;
-        savedBytes_.clear();savedTemplateKeys_.clear();
+        savedBytes_.clear();savedTemplateBytes_.clear();
         for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.snapshot);
         rebuildObjects();activateAreaResource();selecting_=false;
         history_.push_back(captureEdit());refreshAreaControls();setAppearance(dark_,scale_);updateActions();
@@ -559,6 +615,15 @@ private:
     void rememberSelection();
     void recordEdit(const std::string& action);
     void restoreEdit(std::size_t index);
+    void loadWalkmeshes();
+    void configureWalkmesh();
+    std::vector<neomdl::ui::WalkmeshLayer> walkmeshLayers() const;
+    void refreshWalkmeshInfo();
+    void editWalkmesh(const neomdl::ui::WalkmeshEvent& event);
+    void paintWalkmeshFace(const neomdl::ui::WalkmeshFace& face);
+    void commitWalkmeshPaint();
+    void restoreWalkmeshes();
+    void saveWalkmesh();
     void updateDirty();
     void duplicateObject();
     void deleteObject();
@@ -567,7 +632,10 @@ private:
         !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
     bool canPlaceArrival() const {return previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing()&&
         !canvas_->areaPolygonDrawing()&&!canvas_->areaPolygonDragging()&&resources_.count({areaName(),kGit})!=0;}
-    void updatePlacementCursor() {canvas_->SetCursor(wxCursor((placingArrival_||palette_->placing())?wxCURSOR_CROSS:wxCURSOR_ARROW));}
+    void updatePlacementCursor() {
+        const bool faces=previewCurrent_&&objectTabs_->GetCurrentPage()==walkmeshPage_&&showWalkmesh_->GetValue();
+        canvas_->SetCursor(wxCursor((placingArrival_||palette_->placing()||faces)?wxCURSOR_CROSS:wxCURSOR_ARROW));
+    }
     void insertArrivalWaypoint(Vec3 position);
     void linkTransition();
     void openTransitionModule(const neomdl::GameResourceSession& base,const neomdl::ModuleScope& scope);
@@ -579,6 +647,7 @@ private:
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
     bool importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver);
     void requestPreview() {
+        canvas_->cancelWalkmeshStroke();
         placingArrival_=false;
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
@@ -599,7 +668,8 @@ private:
     bool blueprintChanged(const EditState& state) const;
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.snapshot;
-        savedTemplateKeys_.clear();for(const auto& [key,source]:addedTemplates_)savedTemplateKeys_.insert(key);
+        savedTemplateBytes_.clear();for(const auto& [key,source]:addedTemplates_)
+            savedTemplateBytes_[key]=key.second==kWok?walkmeshSnapshots_.at(key):std::make_shared<const std::vector<std::uint8_t>>(source.bytes);
         updateDirty();
         fields_->refreshActiveDocument();updateActions();
     }
@@ -608,7 +678,7 @@ private:
         palette_->setPlacementEnabled(canPlaceObject());updatePlacementCursor();
         enableModuleCommand(ID_AddObject,loaded);FindWindow(ID_AddObject)->Enable(loaded);
         gameChoice_->Enable(loaded);
-        const bool busy=canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing();
+        const bool busy=canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing()||canvas_->walkmeshDragging();
         const bool editing=!requested_&&!loading_.valid()&&!busy;
         const bool undo=!busy&&!history_.empty()&&historyIndex_>0;
         const bool redo=!busy&&!history_.empty()&&historyIndex_+1<history_.size();
@@ -622,6 +692,7 @@ private:
         areaControls_->Enable(loaded&&!busy);areaControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
         moduleControls_->Enable(loaded&&!busy);
         cameraControls_->Enable(loaded&&!busy);cameraControls_->enablePreview(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);
+        walkmeshPage_->Enable(previewCurrent_&&!requested_&&!loading_.valid()&&!busy);configureWalkmesh();refreshWalkmeshInfo();
         gridSnap_->Enable(!busy);rotationSnap_->Enable(!busy);walkmeshSnap_->Enable(!busy);
         FindWindow(ID_FinishPolygon)->Enable(canvas_->areaPolygonDrawing());FindWindow(ID_CancelPolygon)->Enable(canvas_->areaPolygonDrawing());
         const bool trigger=selected&&(placements_[objects_->GetSelection()].list=="TriggerList"||placements_[objects_->GetSelection()].list=="Encounter List")&&previewCurrent_&&editing;
@@ -712,6 +783,16 @@ private:
     AreaControls* areaControls_{};std::string controlsArea_;
     ModuleControls* moduleControls_{};
     CameraControls* cameraControls_{};
+    wxScrolledWindow* walkmeshPage_{};wxPanel* walkmeshSwatch_{};
+    wxCheckBox* showWalkmesh_{};wxCheckBox* xrayWalkmesh_{};
+    wxChoice* walkmeshRooms_{};wxChoice* walkmeshTool_{};wxChoice* walkmeshMaterial_{};
+    wxStaticText* walkmeshInfo_{};wxStaticText* walkmeshMaterialInfo_{};wxButton* applyWalkmesh_{};wxButton* sameWalkmesh_{};wxButton* saveWalkmesh_{};
+    std::map<std::string,std::shared_ptr<neoshared::bwm::BwmFile>> walkmeshes_;
+    std::map<Key,ByteSnapshot> walkmeshSnapshots_;
+    std::set<std::string> paintedWalkmeshes_,rebuildWalkmeshes_;
+    std::set<std::uint32_t> walkableSurfaces_;
+    std::vector<std::string> surfaceDescriptions_;
+    std::string surfaceIdentity_;
     BlueprintEditor* blueprintEditor_{};Key blueprintKey_;
     wxChoice* gizmoTool_{};wxStaticText* gizmoHint_{};wxMenu* editMenu_{};
     wxChoice* gridSnap_{};wxChoice* rotationSnap_{};wxCheckBox* walkmeshSnap_{};
@@ -727,7 +808,7 @@ private:
     bool templatesDirty_{};
     std::vector<EditState> history_;std::size_t historyIndex_{};
     std::map<Key,ByteSnapshot> savedBytes_;
-    std::set<Key> savedTemplateKeys_;
+    std::map<Key,ByteSnapshot> savedTemplateBytes_;
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path archivePath_,localDirectory_,staging_;
@@ -854,7 +935,9 @@ bool ModuleEditor::blueprintChanged(const EditState& state) const {
 EditState ModuleEditor::captureEdit(const std::string& action) const {
     EditState state;
     for(const auto& [key,resource]:resources_)state.bytes.emplace(key,resource.snapshot);
-    state.templates=addedTemplates_;state.imports=importedTemplates_;
+    state.walkmeshes=walkmeshSnapshots_;
+    for(const auto& [key,source]:addedTemplates_)if(key.second!=kWok)state.templates.emplace(key,source);
+    state.imports=importedTemplates_;
     state.origins=templateOrigins_;
     state.inlineSources=inlineSources_;
     state.area=areaName();state.path=selectedPath_;state.identity=fields_->activeResourceIdentity();state.action=action;
@@ -888,14 +971,21 @@ void ModuleEditor::rememberSelection() {
 
 void ModuleEditor::updateDirty() {
     for(auto& [key,resource]:resources_)resource.model->gff().dirty(resource.source.bytes!=*savedBytes_.at(key));
-    std::set<Key> keys;for(const auto& [key,source]:addedTemplates_)keys.insert(key);
-    templatesDirty_=keys!=savedTemplateKeys_;
+    templatesDirty_=addedTemplates_.size()!=savedTemplateBytes_.size()||
+        std::any_of(addedTemplates_.begin(),addedTemplates_.end(),[&](const auto& entry){
+            const auto saved=savedTemplateBytes_.find(entry.first);
+            if(saved==savedTemplateBytes_.end())return true;
+            if(entry.first.second==kWok&&walkmeshSnapshots_.at(entry.first)==saved->second)return false;
+            return entry.second.bytes!=*saved->second;
+        });
 }
 
 void ModuleEditor::recordEdit(const std::string& action) {
     auto state=captureEdit(action);
     const auto& current=history_[historyIndex_];
-    if(state.bytes==current.bytes&&state.imports==current.imports)return;
+    const bool sameTemplates=state.templates.size()==current.templates.size()&&std::equal(state.templates.begin(),state.templates.end(),current.templates.begin(),
+        [](const auto& a,const auto& b){return a.first==b.first&&a.second.bytes==b.second.bytes;});
+    if(state.bytes==current.bytes&&state.walkmeshes==current.walkmeshes&&state.imports==current.imports&&sameTemplates)return;
     const bool blueprint=blueprintChanged(current);
     history_.erase(history_.begin()+historyIndex_+1,history_.end());
     history_.push_back(std::move(state));++historyIndex_;
@@ -904,9 +994,14 @@ void ModuleEditor::recordEdit(const std::string& action) {
 }
 
 void ModuleEditor::restoreEdit(std::size_t index) {
+    canvas_->cancelWalkmeshStroke();
     canvas_->cancelAreaPolygon();
     canvas_->cancelAreaGizmo();
     const auto& state=history_.at(index);
+    const auto current=captureEdit();
+    const bool walkmeshOnly=state.area==areaName()&&state.bytes==current.bytes&&state.imports==current.imports&&
+        state.templates.size()==current.templates.size()&&std::equal(state.templates.begin(),state.templates.end(),current.templates.begin(),
+            [](const auto& a,const auto& b){return a.first==b.first&&a.second.bytes==b.second.bytes;});
     const bool blueprint=blueprintChanged(state);
     selecting_=true;
     for(auto& [key,resource]:resources_) {
@@ -916,7 +1011,12 @@ void ModuleEditor::restoreEdit(std::size_t index) {
         }
         resource.snapshot=state.bytes.at(key);
     }
-    addedTemplates_=state.templates;importedTemplates_=state.imports;
+    std::map<Key,ResourceDocument> walkmeshResources;
+    for(auto it=addedTemplates_.begin();it!=addedTemplates_.end();) {
+        if(it->first.second!=kWok) {++it;continue;}
+        it->second.bytes=*state.walkmeshes.at(it->first);walkmeshResources.insert(addedTemplates_.extract(it++));
+    }
+    addedTemplates_=state.templates;addedTemplates_.merge(walkmeshResources);walkmeshSnapshots_=state.walkmeshes;importedTemplates_=state.imports;
     templateOrigins_=state.origins;
     inlineSources_=state.inlineSources;
     historyIndex_=index;selectedPath_=state.path;
@@ -925,13 +1025,18 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     updateDirty();fields_->activateResource(state.identity);fields_->refreshActiveDocument();rebuildObjects();refreshAreaControls();
     const auto selected=objects_->GetSelection();
     if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
-    selecting_=false;requestPreview();
+    selecting_=false;restoreWalkmeshes();
+    if(walkmeshOnly)updateActions();else requestPreview();
     if(blueprint)refreshBlueprintEditor();
     setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
 }
 
 void ModuleEditor::updateGizmo() {
-    if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing())return;
+    if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing()||canvas_->walkmeshDragging())return;
+    if(objectTabs_->GetCurrentPage()==walkmeshPage_) {
+        canvas_->setAreaGizmo(neomdl::ui::AreaGizmoMode::None);canvas_->setAreaPolygon({},false);canvas_->setAreaMarkers({},{});
+        gizmoHint_->SetLabel("Walkmesh: click or box-select faces. Alt-drag orbits; right-drag pans.");return;
+    }
     const auto selected=objects_->GetSelection();
     const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
     const bool ready=sceneReady&&!palette_->placing()&&selected!=wxNOT_FOUND;
@@ -1406,6 +1511,145 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     setModuleStatusText("Placed "+wxui::toWx(blueprint.fileName)+" at "+wxui::toWx(decimal(position.x)+", "+decimal(position.y)+", "+decimal(position.z)));
 }
 
+std::vector<neomdl::ui::WalkmeshLayer> ModuleEditor::walkmeshLayers() const {
+    std::vector<neomdl::ui::WalkmeshLayer> layers;
+    for(const auto& room:canvas_->areaScene().rooms()) {
+        const auto name=neomdl::resourceKey(room.name);
+        if(room.walkmesh)layers.push_back({name,walkmeshes_.at(name)});
+    }
+    return layers;
+}
+
+void ModuleEditor::loadWalkmeshes() {
+    const auto& scene=canvas_->areaScene();
+    if(!scene.surfaceTable()) {
+        surfaceIdentity_.clear();walkmeshMaterial_->Clear();surfaceDescriptions_.clear();walkableSurfaces_.clear();walkmeshTool_->SetSelection(0);
+        walkmeshMaterialInfo_->SetLabel("Load game resources for surfacemat.2da.");
+    }
+    if(scene.surfaceTable()&&scene.surfaceTable()->identity!=surfaceIdentity_) {
+        neo2da::TwoDAFile table;table.loadBytes(scene.surfaceTable()->bytes);
+        surfaceIdentity_=scene.surfaceTable()->identity;walkmeshMaterial_->Clear();surfaceDescriptions_.clear();walkableSurfaces_.clear();
+        for(std::size_t i=0;i<std::min<std::size_t>(32,table.rowCount());++i) {
+            std::string label;int walk=0,check=0,los=0;
+            neomdl::engine2da::getString(table,int(i),"label",label);
+            neomdl::engine2da::getInt(table,int(i),"walk",walk);neomdl::engine2da::getInt(table,int(i),"walkcheck",check);neomdl::engine2da::getInt(table,int(i),"lineofsight",los);
+            walkmeshMaterial_->Append(wxui::toWx(std::to_string(i)+" — "+label));
+            surfaceDescriptions_.push_back("Walk: "+std::to_string(walk)+"   WalkCheck: "+std::to_string(check)+"   LineOfSight: "+std::to_string(los));
+            if(walk==1)walkableSurfaces_.insert(std::uint32_t(i));
+        }
+        if(table.rowCount())walkmeshMaterial_->SetSelection(0);
+    }
+    const auto selected=walkmeshRooms_->GetStringSelection();walkmeshRooms_->Clear();walkmeshRooms_->Append("All rooms");walkmeshRooms_->SetSelection(0);
+    for(const auto& room:scene.rooms())if(room.walkmesh) {
+        const auto name=neomdl::resourceKey(room.name);const Key key{name,kWok};
+        walkmeshRooms_->Append(wxui::toWx(name));
+        if(!walkmeshes_.count(name)) {
+            const auto& source=*room.walkmeshSource;
+            addedTemplates_.emplace(key,source);templateOrigins_.emplace(key,hostResources_);
+            const auto snapshot=std::make_shared<const std::vector<std::uint8_t>>(source.bytes);
+            savedTemplateBytes_.emplace(key,snapshot);walkmeshSnapshots_.emplace(key,snapshot);
+            for(auto& state:history_) {state.walkmeshes.emplace(key,snapshot);state.origins.emplace(key,hostResources_);}
+            inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
+            walkmeshes_.emplace(name,std::make_shared<neoshared::bwm::BwmFile>(*room.walkmesh));
+        } else *walkmeshes_.at(name)=*room.walkmesh;
+    }
+    if(walkmeshRooms_->GetCount()==2)walkmeshRooms_->SetSelection(1);
+    else walkmeshRooms_->SetStringSelection(selected);
+    canvas_->setWalkmeshLayers(walkmeshLayers());configureWalkmesh();refreshWalkmeshInfo();
+}
+
+void ModuleEditor::configureWalkmesh() {
+    const bool ready=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
+    const bool visible=ready&&objectTabs_->GetCurrentPage()==walkmeshPage_&&showWalkmesh_->GetValue();
+    const auto tool=visible?(walkmeshTool_->GetSelection()==0?neomdl::ui::WalkmeshTool::Select:neomdl::ui::WalkmeshTool::Paint):neomdl::ui::WalkmeshTool::View;
+    const auto room=walkmeshRooms_->GetSelection()>0?wxui::toStd(walkmeshRooms_->GetStringSelection()):std::string{};
+    canvas_->configureWalkmesh(visible,xrayWalkmesh_->GetValue(),tool,room);
+}
+
+void ModuleEditor::refreshWalkmeshInfo() {
+    const auto count=canvas_->selectedWalkmeshFaces().size();
+    std::map<std::uint32_t,std::size_t> surfaces;
+    for(const auto& face:canvas_->selectedWalkmeshFaces())++surfaces[walkmeshes_.at(face.first)->faces.at(face.second).material];
+    auto info=std::to_string(count)+" faces selected.";
+    for(const auto& [surface,faces]:surfaces)info+="\nSurface "+std::to_string(surface)+": "+std::to_string(faces)+" faces";
+    walkmeshInfo_->SetLabel(wxui::toWx(info));walkmeshInfo_->Wrap(FromDIP(195));
+    const auto material=walkmeshMaterial_->GetSelection();
+    if(material!=wxNOT_FOUND) {
+        walkmeshMaterialInfo_->SetLabel(wxui::toWx(surfaceDescriptions_.at(material)));walkmeshMaterialInfo_->Wrap(FromDIP(195));
+        const auto color=neomdl::ui::walkmeshMaterialColor(std::uint32_t(material));
+        walkmeshSwatch_->SetBackgroundColour(wxColour(int(color.x*255),int(color.y*255),int(color.z*255)));walkmeshSwatch_->Refresh();
+    }
+    applyWalkmesh_->Enable(count!=0&&material!=wxNOT_FOUND);sameWalkmesh_->Enable(material!=wxNOT_FOUND);walkmeshTool_->Enable(material!=wxNOT_FOUND);
+    saveWalkmesh_->Enable(walkmeshRooms_->GetSelection()>0);
+    walkmeshPage_->Layout();
+}
+
+void ModuleEditor::paintWalkmeshFace(const neomdl::ui::WalkmeshFace& face) {
+    auto& mesh=*walkmeshes_.at(face.first);auto& material=mesh.faces.at(face.second).material;
+    const auto next=std::uint32_t(walkmeshMaterial_->GetSelection());
+    if(material==next)return;
+    if(walkableSurfaces_.count(material)!=walkableSurfaces_.count(next))rebuildWalkmeshes_.insert(face.first);
+    material=next;paintedWalkmeshes_.insert(face.first);
+}
+
+void ModuleEditor::commitWalkmeshPaint() {
+    auto selection=canvas_->selectedWalkmeshFaces();
+    for(const auto& room:paintedWalkmeshes_) {
+        auto& mesh=*walkmeshes_.at(room);
+        if(rebuildWalkmeshes_.count(room)) {
+            const auto count=std::count_if(mesh.faces.begin(),mesh.faces.end(),[&](const auto& face){return walkableSurfaces_.count(face.material)!=0;});
+            std::uint32_t walkable=0,blocked=std::uint32_t(count);std::vector<std::uint32_t> remap;remap.reserve(mesh.faces.size());
+            auto normals=mesh.faceNormals;auto distances=mesh.faceDistances;
+            std::set<neomdl::ui::WalkmeshFace> remapped;
+            for(const auto& face:selection)if(face.first!=room)remapped.insert(face);
+            for(std::size_t i=0;i<mesh.faces.size();++i) {
+                const auto target=walkableSurfaces_.count(mesh.faces[i].material)?walkable++:blocked++;remap.push_back(target);
+                if(selection.count({room,std::uint32_t(i)}))remapped.emplace(room,target);
+            }
+            neoshared::bwm::buildBwm(mesh,walkableSurfaces_);
+            for(std::size_t i=0;i<remap.size();++i) {mesh.faceNormals[remap[i]]=normals[i];mesh.faceDistances[remap[i]]=distances[i];}
+            selection=std::move(remapped);
+        }
+        addedTemplates_.at({room,kWok}).bytes=neoshared::bwm::writeBwm(mesh);
+        walkmeshSnapshots_[{room,kWok}]=std::make_shared<const std::vector<std::uint8_t>>(addedTemplates_.at({room,kWok}).bytes);
+        canvas_->updateRoomWalkmesh(room,mesh);
+    }
+    canvas_->setWalkmeshSelection(std::move(selection));recordEdit("Paint walkmesh material");
+    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();updateActions();
+}
+
+void ModuleEditor::restoreWalkmeshes() {
+    for(auto& [room,mesh]:walkmeshes_) {
+        const auto& source=addedTemplates_.at({room,kWok});*mesh=neoshared::bwm::readBwm(source.bytes,source.fileName);
+    }
+    for(const auto& room:canvas_->areaScene().rooms())if(room.walkmesh)
+        canvas_->updateRoomWalkmesh(room.name,*walkmeshes_.at(neomdl::resourceKey(room.name)));
+    paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();canvas_->setWalkmeshSelection({});refreshWalkmeshInfo();
+}
+
+void ModuleEditor::editWalkmesh(const neomdl::ui::WalkmeshEvent& event) {
+    if(event.painting) {
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Begin) {rememberSelection();paintedWalkmeshes_.clear();rebuildWalkmeshes_.clear();}
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Preview) {if(event.face)paintWalkmeshFace(*event.face);return;}
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Commit) {commitWalkmeshPaint();return;}
+        if(event.phase==neomdl::ui::AreaGizmoPhase::Cancel) {
+            auto selection=canvas_->selectedWalkmeshFaces();restoreWalkmeshes();canvas_->setWalkmeshSelection(std::move(selection));
+        }
+    }
+    updateActions();
+}
+
+void ModuleEditor::saveWalkmesh() {
+    const Key key{wxui::toStd(walkmeshRooms_->GetStringSelection()),kWok};const auto& source=addedTemplates_.at(key);
+    wxFileDialog dialog(this,"Save binary room walkmesh",{},wxui::toWx(source.fileName),"Binary walkmesh (*.wok)|*.wok",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+    if(dialog.ShowModal()!=wxID_OK)return;
+    const auto path=neosettings::pathFromWx(dialog.GetPath());validateHostOutput(path,inputs_);
+    std::ofstream output;output.exceptions(std::ios::failbit|std::ios::badbit);output.open(path,std::ios::binary|std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(source.bytes.data()),source.bytes.size());output.close();
+    savedTemplateBytes_[key]=walkmeshSnapshots_.at(key);updateDirty();updateActions();
+    setModuleStatusText("Saved binary walkmesh: "+neosettings::pathToWx(path));
+}
+
 void ModuleEditor::insertArrivalWaypoint(Vec3 position) {
     rememberSelection();
     auto& resource=resources_.at({areaName(),kGit});auto& root=*resource.model->gff().root();
@@ -1740,7 +1984,7 @@ void ModuleEditor::tick() {
                     palette_->setResources(session_,catalog_,localDirectory_);paletteSession_=session_;
                 }
                 previewError_.clear();
-                mapOwners();setModuleStatusText("Live preview — edits update the area. Drag to orbit; right-drag to pan; scroll to zoom.");
+                loadWalkmeshes();mapOwners();setModuleStatusText("Live preview — edits update the area. Drag to orbit; right-drag to pan; scroll to zoom.");
             }
         } catch(const neoshared::bif::JobCancelled&) {
             setModuleStatusText("Area load cancelled.");
