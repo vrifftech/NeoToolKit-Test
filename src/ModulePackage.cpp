@@ -151,7 +151,7 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
         progress("Collecting dependencies: "+entry.source.fileName);
         if(key.second==2010) {
             for(const auto& name:scriptLiterals(entry.source.bytes))
-                for(const auto type:{2010,2029,2025,2027,2032,2035,2040,2042,2044,2051})add(name,std::uint16_t(type),resolve,false);
+                for(const auto type:{2010,2029,2025,2027,2032,2035,2040,2042,2044,2051,2058})add(name,std::uint16_t(type),resolve,false);
         } else if(std::find(gffTypes.begin(),gffTypes.end(),key.second)!=gffTypes.end()) {
             neogff::GffFile file;file.LoadBytes(entry.source.bytes);
             const auto* flag=static_cast<const neogff::GffByteField*>(file.root()->GetFieldByLabel("UseTemplates"));

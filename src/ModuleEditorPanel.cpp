@@ -750,7 +750,7 @@ private:
     void insertObject(Vec3 position,const ObjectPlacementOptions& options,const std::vector<Vec3>& polygon={});
     std::string importTemplate(neoshared::ResourceDocument source,const neomdl::ResourceResolver& resolver);
     std::optional<ResourceDocument> sceneTemplate(const std::string& name,std::uint16_t type) const;
-    bool importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver);
+    bool importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool fromTemplate);
     void requestPreview() {
         canvas_->cancelWalkmeshStroke();
         placingArrival_=false;
@@ -1526,13 +1526,17 @@ std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& n
     return session_->resolve(name,type);
 }
 
-bool ModuleEditor::importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver) {
+bool ModuleEditor::importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool fromTemplate) {
     bool changed=false;
-    for(const auto& [label,reference]:std::array<std::pair<const char*,const char*>,2>{{
+    for(const auto& [label,templateReference]:std::array<std::pair<const char*,const char*>,2>{{
             {"Equip_ItemList","EquippedRes"},{"ItemList","InventoryRes"}}}) {
         if(auto* list=dynamic_cast<neogff::GffList*>(record.GetFieldByLabel(label)))for(const auto& item:list->allStructs()) {
-            const auto* field=item->GetFieldByLabel(reference);
-            if(!field)continue;
+            const auto* reference=fromTemplate?templateReference:dynamic_cast<const neogff::GffResRefField*>(item->GetFieldByLabel("EquippedRes"))?"EquippedRes":"InventoryRes";
+            const auto* field=dynamic_cast<const neogff::GffResRefField*>(item->GetFieldByLabel(reference));
+            if(!field) {
+                if(!fromTemplate)changed=importItemReferences(*item,resolver,false)||changed;
+                continue;
+            }
             const auto name=neomdl::resourceKey(field->GetString());
             const auto imported=importTemplate(resolver(name,2025).value(),resolver);
             if(imported!=name) {setField(*item,std::make_unique<neogff::GffResRefField>(reference,imported));changed=true;}
@@ -1551,7 +1555,7 @@ std::string ModuleEditor::importTemplate(ResourceDocument source,const neomdl::R
     if(const auto found=importedTemplates_.find(identity);found!=importedTemplates_.end())return found->second;
     const auto key=resourceKey(source);
     neogff::GffFile file;file.LoadBytes(source.bytes);
-    const auto changed=importItemReferences(*file.root(),resolver);
+    const auto changed=importItemReferences(*file.root(),resolver,source.type!=2025);
     const auto existing=sceneTemplate(key.first,key.second);
     if(!changed&&existing&&existing->bytes==source.bytes) {
         importedTemplates_[identity]=key.first;return key.first;
@@ -1611,7 +1615,7 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
     }
     instance->typeid_=kind.structure;
     const auto reference=templates&&kind.type!=2058?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
-    if(!templates) {importItemReferences(*instance,resolver);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
+    if(!templates) {importItemReferences(*instance,resolver,false);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
     setField(*instance,std::make_unique<neogff::GffResRefField>(kind.reference,reference));
     const auto number=[&](const char* name,float value){setField(*instance,std::make_unique<neogff::GffFloatField>(name,value));};
     number(kind.shortCoordinates?"X":"XPosition",position.x);
