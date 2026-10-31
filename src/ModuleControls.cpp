@@ -83,12 +83,12 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
         {"Mod_MinPerHour","BYTE 0..255. The engine interprets 0 as 5 real minutes per game hour."},
         {"Mod_DawnHour","BYTE 0..255, compared directly with the world hour. No 23-hour clamp is applied."},
         {"Mod_DuskHour","BYTE 0..255, compared directly with the world hour. No 23-hour clamp is applied."},
-        {"Mod_StartYear","DWORD 0..4294967295. engine converts values above 32000 to calendar year 1340."},
-        {"Mod_StartMonth","BYTE 0..255. Calendar months are 1..12; engine converts other values to June."},
-        {"Mod_StartDay","BYTE 0..255. Months have 28 days; engine converts other day values to day 1."},
-        {"Mod_StartHour","BYTE 0..255. engine converts values above 23 to hour 23."},
-        {"Mod_StartMinute","WORD 0..65535. engine converts values above 59 to minute 59."},
-        {"Mod_StartSecond","WORD 0..65535. engine converts values above 59 to 56 seconds."},
+        {"Mod_StartYear","DWORD 0..4294967295. The engine converts values above 32000 to calendar year 1340."},
+        {"Mod_StartMonth","BYTE 0..255. Calendar months are 1..12; the engine converts other values to June."},
+        {"Mod_StartDay","BYTE 0..255. Months have 28 days; the engine converts other day values to day 1."},
+        {"Mod_StartHour","BYTE 0..255. The engine converts values above 23 to hour 23."},
+        {"Mod_StartMinute","WORD 0..65535. The engine converts values above 59 to minute 59."},
+        {"Mod_StartSecond","WORD 0..65535. The engine converts values above 59 to 56 seconds."},
         {"Mod_StartMiliSec","WORD 0..65535, added directly to the time offset without a 999-millisecond clamp."}
     };
     for(const auto& c:controls) {
