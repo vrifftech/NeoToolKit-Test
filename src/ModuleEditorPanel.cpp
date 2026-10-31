@@ -90,6 +90,23 @@ struct Placement {
     enum class Rotation {None,Bearing,Direction,Entry} rotation{Rotation::None};
     float heading{};
 };
+struct EncounterSpatial {
+    std::unique_ptr<neogff::GffList> geometry,spawns;
+    Vec3 origin{};bool inheritedGeometry{};
+    void rebase(Vec3 position) {
+        if(inheritedGeometry&&geometry)for(auto& point:geometry->allStructs()) {
+            const auto fields=fieldsOf(*point);const char* labels[]={"X","Y","Z"};
+            const float source[]={origin.x,origin.y,origin.z},target[]={position.x,position.y,position.z};
+            for(std::size_t axis=0;axis<3;++axis)setField(*point,std::make_unique<neogff::GffFloatField>(labels[axis],source[axis]+scalar(fields,labels[axis])-target[axis]));
+        }
+        origin=position;inheritedGeometry=false;
+    }
+    void materialize(neogff::GffStruct& record,Vec3 position) {
+        rebase(position);
+        if(geometry)setField(record,std::move(geometry));
+        if(spawns)setField(record,std::move(spawns));
+    }
+};
 struct Preview {
     neomdl::AreaScene scene;
     std::shared_ptr<neomdl::GameResourceSession> session;
@@ -704,6 +721,7 @@ private:
     void beginTriggerDrawing(bool create);
     void polygonChanged(const neomdl::ui::AreaPolygonEvent& event);
     void writeTriggerGeometry(const Placement& placement,const std::vector<Vec3>& points,int vertex);
+    EncounterSpatial encounterSpatial(const Placement& placement) const;
     EditState captureEdit(const std::string& action={}) const;
     void rememberSelection();
     void recordEdit(const std::string& action);
@@ -945,6 +963,7 @@ private:
     std::filesystem::path archivePath_,localDirectory_,staging_;
     std::vector<std::filesystem::path> inputs_;
     std::vector<Placement> placements_;
+    std::vector<Vec3> encounterFootprint_;
     std::map<std::string,std::string> ownerPaths_;
     std::map<std::string,std::set<neomdl::LightOwnerId>> pathOwners_;
     std::string selectedPath_,moduleName_,sourceTitle_,previewError_;
@@ -1168,6 +1187,32 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
 }
 
+EncounterSpatial ModuleEditor::encounterSpatial(const Placement& p) const {
+    const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
+    const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    const auto* geometry=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
+    const auto* spawns=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("SpawnPointList"));
+    const bool inheritedGeometry=!geometry;
+    const auto* templates=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("UseTemplates"));
+    neogff::GffFile blueprint;Vec3 origin=p.position;
+    if(templates&&templates->value&&(!geometry||!spawns)) {
+        const auto fields=fieldsOf(record);
+        const auto name=neomdl::resourceKey(fields.at("TemplateResRef")->GetString());
+        blueprint.LoadBytes(sceneTemplate(name,2040).value().bytes);
+        if(!geometry) {
+            geometry=dynamic_cast<const neogff::GffList*>(blueprint.root()->GetFieldByLabel("Geometry"));
+            const auto fields=fieldsOf(*blueprint.root());origin={scalar(fields,"XPosition"),scalar(fields,"YPosition"),scalar(fields,"ZPosition")};
+        }
+        if(!spawns)spawns=dynamic_cast<const neogff::GffList*>(blueprint.root()->GetFieldByLabel("SpawnPointList"));
+    }
+    EncounterSpatial spatial;spatial.origin=origin;spatial.inheritedGeometry=inheritedGeometry;
+    if(geometry) {
+        auto copy=geometry->Clone();spatial.geometry.reset(static_cast<neogff::GffList*>(copy.release()));
+    }
+    if(spawns) {auto copy=spawns->Clone();spatial.spawns.reset(static_cast<neogff::GffList*>(copy.release()));}
+    return spatial;
+}
+
 void ModuleEditor::updateGizmo() {
     if(canvas_->areaGizmoDragging()||canvas_->areaPolygonDragging()||canvas_->areaPolygonDrawing()||canvas_->walkmeshDragging())return;
     const bool sceneReady=previewCurrent_&&!requested_&&!loading_.valid()&&!cameraControls_->previewing();
@@ -1203,13 +1248,13 @@ void ModuleEditor::updateGizmo() {
     if(ready&&placements_[selected].list=="TriggerList") {
         for(const auto& trigger:canvas_->areaScene().triggers())if(trigger.sourceIndex==placements_[selected].index)footprint=trigger.worldFootprint;
     } else if(ready&&placements_[selected].list=="Encounter List") {
-        const auto& p=placements_[selected];const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
-        const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
-        if(const auto* geometry=static_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry")))
-            for(const auto& point:geometry->allStructs()) {
-                const auto fields=fieldsOf(*point);footprint.push_back({p.position.x+scalar(fields,"X"),p.position.y+scalar(fields,"Y"),p.position.z+scalar(fields,"Z")});
+        const auto& p=placements_[selected];const auto spatial=encounterSpatial(p);
+        if(spatial.geometry)
+            for(const auto& point:spatial.geometry->allStructs()) {
+                const auto fields=fieldsOf(*point);footprint.push_back({spatial.origin.x+scalar(fields,"X"),spatial.origin.y+scalar(fields,"Y"),spatial.origin.z+scalar(fields,"Z")});
             }
     }
+    encounterFootprint_=footprint;
     canvas_->setAreaPolygon(std::move(footprint),tool==3&&ready);
     if(ready) {
         const auto& p=placements_[selected];
@@ -1240,9 +1285,11 @@ void ModuleEditor::writeTriggerGeometry(const Placement& p,const std::vector<Vec
     auto& resource=resources_.at(identityKeys_.at(p.identity));
     auto& list=dynamic_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list));
     auto& record=*list.GetStruct(p.index);
-    const auto* original=dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
-    auto geometry=std::make_unique<neogff::GffList>("Geometry");
     const bool encounter=p.list=="Encounter List";
+    auto spatial=encounter?encounterSpatial(p):EncounterSpatial{};
+    if(encounter)spatial.rebase(p.position);
+    const auto* original=encounter?spatial.geometry.get():dynamic_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry"));
+    auto geometry=std::make_unique<neogff::GffList>("Geometry");
     const std::array<const char*,3> labels=encounter?std::array<const char*,3>{"X","Y","Z"}:std::array<const char*,3>{"PointX","PointY","PointZ"};
     const float origin[]={p.position.x,p.position.y,p.position.z};
     for(std::size_t i=0;i<points.size();++i) {
@@ -1316,11 +1363,9 @@ void ModuleEditor::previewTransform(const Placement& p,Vec3 position,float headi
     if(p.list=="TriggerList")canvas_->previewAreaTrigger(p.index,position,heading-p.heading);
     if(p.list=="CameraList")canvas_->previewAreaCamera(p.index,position);
     if(p.list=="Encounter List") {
-        const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
-        const auto& record=*static_cast<const neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
-        std::vector<Vec3> points;
-        if(const auto* geometry=static_cast<const neogff::GffList*>(record.GetFieldByLabel("Geometry")))for(const auto& point:geometry->allStructs()) {
-            const auto fields=fieldsOf(*point);points.push_back({position.x+scalar(fields,"X"),position.y+scalar(fields,"Y"),position.z+scalar(fields,"Z")});
+        auto points=encounterFootprint_;
+        for(auto& point:points) {
+            point.x+=position.x-p.position.x;point.y+=position.y-p.position.y;point.z+=position.z-p.position.z;
         }
         canvas_->setAreaPolygon(std::move(points),gizmoTool_->GetSelection()==3);
     }
@@ -1415,7 +1460,7 @@ void ModuleEditor::selectObject(int index,bool selectField) {
             else if(p.list=="SoundList")source="UTS supplies sound properties. GIT supplies position and generated type.";
             else if(p.list=="List")source="UTI supplies item properties. GIT supplies placement and facing; the item is shown with a selectable marker.";
             else if(p.list=="StoreList")source="UTM supplies store properties and inventory. GIT uses ResRef for its template, plus position and facing. The store is shown with a selectable marker.";
-            else if(p.list=="Encounter List")source="UTE supplies encounter rules and creatures. GIT supplies the footprint and absolute spawn points. Moving an encounter also moves its spawn points.";
+            else if(p.list=="Encounter List")source="UTE supplies encounter rules and creatures. GIT overrides the template's footprint and world-space spawn points. Spatial edits are saved on this instance.";
         }
         objectSource_->SetLabel(wxui::toWx(source));objectSource_->Wrap(FromDIP(195));objectSource_->GetParent()->Layout();
         const float values[]={p.position.x,p.position.y,p.position.z,p.heading};
@@ -1448,6 +1493,7 @@ void ModuleEditor::applyTransform() {
     rememberSelection();
     if(p.list=="Encounter List"&&positionChanged) {
         auto& record=*static_cast<neogff::GffList&>(*resource.model->gff().root()->GetFieldByLabel(p.list)).GetStruct(p.index);
+        encounterSpatial(p).materialize(record,p.position);
         if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))for(auto& spawn:spawns->allStructs()) {
             const auto fields=fieldsOf(*spawn);const char* labels[]={"X","Y","Z"};
             for(std::size_t axis=0;axis<3;++axis)if(values[axis]!=previous[axis])setField(*spawn,std::make_unique<neogff::GffFloatField>(labels[axis],scalar(fields,labels[axis])+values[axis]-previous[axis]));
@@ -1536,7 +1582,7 @@ std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& n
     if(const auto found=addedTemplates_.find({name,type});found!=addedTemplates_.end())return found->second;
     if(auto source=archiveResources_(name,type))return source;
     if(!localDirectory_.empty())if(auto source=neomdl::directoryResources(localDirectory_)(name,type))return source;
-    return session_->resolve(name,type);
+    return session_?session_->resolve(name,type):hostResources_(name,type);
 }
 
 bool ModuleEditor::importItemReferences(neogff::GffStruct& record,const neomdl::ResourceResolver& resolver,bool fromTemplate) {
@@ -1732,6 +1778,7 @@ void ModuleEditor::moveRoomGizmo(const neomdl::ui::AreaGizmoEvent& event) {
 void ModuleEditor::translatePlacement(const Placement& p,Vec3 offset,bool moveSpawns) {
     auto& resource=resources_.at(identityKeys_.at(p.identity));auto& root=*resource.model->gff().root();
     auto& record=p.coordinates==Placement::Coordinates::Entry?root:*static_cast<neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    if(p.list=="Encounter List")encounterSpatial(p).materialize(record,p.position);
     const float delta[]={offset.x,offset.y,offset.z};
     if(moveSpawns&&p.list=="Encounter List")if(auto* spawns=static_cast<neogff::GffList*>(record.GetFieldByLabel("SpawnPointList")))
         for(auto& spawn:spawns->allStructs()) {
