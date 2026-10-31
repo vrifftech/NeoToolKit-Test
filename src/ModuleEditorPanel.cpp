@@ -546,7 +546,7 @@ public:
         try {
             if(!canClose())return false;
             modFolder_=context_.captureModFolder();
-            auto scope=neoshared::bif::ModFolder::moduleName(source.sourcePath);
+            auto scope=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;
             auto resolver=captureHostResources(scope.empty()?resourceKey(source).first:scope);
             std::map<Key,Resource> resources;
             const auto key=resourceKey(source);
@@ -810,7 +810,6 @@ private:
     void editBlueprint();
     void refreshBlueprintEditor(bool itemsChanged);
     bool blueprintChanged(const EditState& state,bool& itemsChanged) const;
-    bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.snapshot;
         savedTemplateBytes_.clear();for(const auto& [key,source]:addedTemplates_)

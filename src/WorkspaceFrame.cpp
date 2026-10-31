@@ -55,7 +55,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     neomodules::Context browserContext;
     browserContext.embedded=true;browserContext.compact=false;
     browserContext.closeRequested=[this]{Close();};
-    browserContext.titleChanged=[this](const wxString& title){SetTitle("NeoToolKit Test - "+title);};
+    browserContext.titleChanged=[this](const wxString& title){resourceSession_.reset();resourceResolvers_.clear();SetTitle("NeoToolKit Test - "+title);};
     browser_=neobif::ui::createBrowserPanel(splitter_,std::move(browserContext));
     editors_=new wxAuiNotebook(splitter_,wxID_ANY,wxDefaultPosition,wxDefaultSize,
         wxAUI_NB_TOP|wxAUI_NB_TAB_MOVE|wxAUI_NB_CLOSE_ON_ACTIVE_TAB|wxAUI_NB_SCROLL_BUTTONS);
@@ -137,11 +137,44 @@ WorkspaceFrame::~WorkspaceFrame() {
 void WorkspaceFrame::setModFolder(const std::filesystem::path& path) {
     wxBusyCursor busy;
     auto next=path.empty()?std::shared_ptr<const neoshared::bif::ModFolder>{}:std::make_shared<const neoshared::bif::ModFolder>(path);
-    modFolder_=std::move(next);settings_.writePath("Paths/ModFolder",modFolder_?modFolder_->root():std::filesystem::path{});
+    modFolder_=std::move(next);resourceSession_.reset();resourceResolvers_.clear();settings_.writePath("Paths/ModFolder",modFolder_?modFolder_->root():std::filesystem::path{});
     auto label=modFolder_?neosettings::pathToWx(modFolder_->root()):wxString("None");label.Replace("&","&&");
     GetMenuBar()->FindItem(ID_ModFolderPath)->SetItemLabel(label);
     GetMenuBar()->Enable(ID_RefreshModFolder,bool(modFolder_));GetMenuBar()->Enable(ID_ClearModFolder,bool(modFolder_));
     for(auto* panel:panels())if(panel)panel->resourceContextChanged();
+}
+neoshared::ResourceResolver WorkspaceFrame::captureResources(const std::string& module) {
+    if(const auto found=resourceResolvers_.find(module);found!=resourceResolvers_.end())return found->second;
+    if(!resourceSession_) {
+        std::filesystem::path key;
+        for(const auto& path:browser_->sourcePaths()) {
+            auto name=neoshared::pathToUtf8(path.filename());std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return char(std::tolower(c));});
+            if(name=="chitin.key") {key=path;break;}
+        }
+        auto install=key.empty()?std::optional<neoshared::game::GameInstall>{}:neoshared::game::inspectGameInstallation(key.parent_path());
+        if(!install||(install->id!="kotor"&&install->id!="kotor2")) {
+            auto resolver=neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);
+            resourceResolvers_.emplace(module,resolver);return resolver;
+        }
+        for(const auto& saved:neogames::resolver().settings().readSaved(*neogames::findGame(install->id)))
+            if(saved.installPath.lexically_normal()==install->installPath.lexically_normal()) {install=saved;break;}
+        wxBusyCursor busy;auto session=std::make_shared<neomdl::GameResourceSession>();std::string error;
+        if(!session->open(*install,error,{},modFolder_))throw std::runtime_error(error);
+        resourceSession_=std::move(session);
+    }
+    auto native=resourceSession_->resolver();
+    if(!module.empty()) {
+        const auto scopes=resourceSession_->modules();const auto found=std::find_if(scopes.begin(),scopes.end(),[&](const auto& scope){return scope.name==module;});
+        if(found!=scopes.end()) {
+            neomdl::GameResourceSession scoped;std::string error;
+            if(!scoped.openModule(*resourceSession_,*found,error))throw std::runtime_error(error);
+            native=scoped.resolver();
+        }
+    }
+    neoshared::ResourceResolver resolver=[native=std::move(native)](const std::string& name,std::uint16_t type,const neoshared::bif::JobControl& job) {
+        neomdl::ResourceLoadScope work(job);return native(name,type);
+    };
+    resourceResolvers_.emplace(module,resolver);return resolver;
 }
 bool WorkspaceFrame::gamePath(const std::filesystem::path& path) const {
     const auto inside=[&](const std::filesystem::path& root) {
@@ -263,11 +296,10 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     context.compact=kind==EditorKind::Models||kind==EditorKind::Modules;
     context.validateOutputs=[this](const auto& paths,const auto* owner,const auto& inputs){checkOutputs(paths,owner,inputs);};
     context.resolveResource=[this](const std::string& resref,std::uint16_t type){
-        if(modFolder_&&modFolder_->shadows(resref,type))return modFolder_->resolve(resref,type);
-        return browser_->resolveResource(resref,type);
+        return captureResources()(resref,type,{});
     };
-    context.captureResourceResolver=[this]{return neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver());};
-    context.captureScopedResourceResolver=[this](const std::string& module){return neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);};
+    context.captureResourceResolver=[this]{return captureResources();};
+    context.captureScopedResourceResolver=[this](const std::string& module){return captureResources(module);};
     context.captureModFolder=[this]{return modFolder_;};
     neomodules::Panel* panel=nullptr;
     switch(kind) {
@@ -449,14 +481,14 @@ void WorkspaceFrame::checkOutputs(const std::vector<std::filesystem::path>& path
     neoshared::checkResourceOutputs(paths,inputs,false);
 }
 bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std::string& editor) {
-    const auto relative=modFolder_?resource.sourcePath.lexically_relative(modFolder_->root()):std::filesystem::path{};
-    const bool fromMod=!relative.empty()&&*relative.begin()!="..";
-    if(modFolder_&&!fromMod) {
-        const auto name=neoshared::pathToUtf8(neoshared::pathFromUtf8(resource.fileName).stem());
-        const auto module=neoshared::bif::ModFolder::moduleName(resource.sourcePath);
-        const auto scope=module.empty()?std::optional<std::string>{}:std::optional<std::string>{module};
-        if(auto replacement=modFolder_->openResource(name,resource.type,scope))resource=std::move(*replacement);
-    }
+    const auto module=resource.module.empty()?neoshared::bif::ModFolder::moduleName(resource.sourcePath):resource.module;
+    const auto resolver=captureResources(module);
+    const auto name=neoshared::pathToUtf8(neoshared::pathFromUtf8(resource.fileName).stem());
+    std::optional<neoshared::ResourceDocument> replacement;
+    if(resourceSession_)replacement=neoshared::isTextureType(resource.type)?neoshared::resolveTexture(name,
+        [&](const std::string& name,std::uint16_t type){return resolver(name,type,{});}):resolver(name,resource.type,{});
+    else if(modFolder_)replacement=modFolder_->openResource(name,resource.type,module);
+    if(replacement) {replacement->module=module;resource=std::move(*replacement);}
     return openSnapshot(std::move(resource),editor,true);
 }
 bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession) {
@@ -502,7 +534,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& input,const std::stri
         }
         if(installed&&modFolder_&&!neoerf::isArchiveExtension(ext))
             if(const auto type=neoshared::bif::resourceTypeFromExtension(ext,neoshared::bif::GameProfile::KotOR))
-                if(auto resource=modFolder_->openResource(neoshared::pathToUtf8(path.stem()),*type)) {openSnapshot(std::move(*resource),editor,false);return;}
+                if(auto resource=modFolder_->openResource(neoshared::pathToUtf8(path.stem()),*type,std::string{})) {openSnapshot(std::move(*resource),editor,false);return;}
         const auto choices=editorsForExtension(ext);
         if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, model, table, texture, soundset, talk table, or GFF-backed resource.");
         const auto selected=selectResourceEditor(choices,editor);

@@ -38,7 +38,7 @@ public:
     }
     ~ObjectBlueprints() override {DestroyChildren();}
     bool openFile(const std::filesystem::path& path) override {editor_->applyPending();const auto opened=fields_->openFile(path);if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
-    bool openResource(neoshared::ResourceDocument source) override {editor_->applyPending();const auto opened=fields_->openResource(std::move(source));if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
+    bool openResource(neoshared::ResourceDocument source) override {editor_->applyPending();scopes_[source.identity]=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;const auto opened=fields_->openResource(std::move(source));if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
     void resourceContextChanged() override {editor_->applyPending();refresh(true);}
     bool canClose() override {editor_->applyPending();return fields_->canClose();}
     void setAppearance(bool dark,double scale) override {fields_->setAppearance(dark,scale);wxui::applyTheme(editor_,dark);neoview::applyFontScale(editor_,scale);}
@@ -50,11 +50,12 @@ private:
         if(model&&model->loaded()&&model->fileType().compare(0,3,type_==2027?"UTC":"UTP")==0) {
             editor_->Enable();
             if(resources||changed) {
-                auto captured=context_.captureResourceResolver();const auto directory=model->filename().parent_path();
+                const auto module=scopes_.find(identity);const auto scope=module==scopes_.end()?std::string{}:module->second;
+                auto captured=context_.captureScopedResourceResolver(scope);const auto directory=model->filename().parent_path();
                 auto local=directory.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory);
                 const auto mod=context_.captureModFolder();
-                editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local),mod](const std::string& name,std::uint16_t type) {
-                    if(mod&&mod->shadows(name,type))return mod->resolve(name,type,{},neomdl::resourceLoadJob());
+                editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local),mod,scope](const std::string& name,std::uint16_t type) {
+                    if(mod&&mod->shadows(name,type,scope))return mod->resolve(name,type,scope,neomdl::resourceLoadJob());
                     if(local)if(auto source=local(name,type))return source;
                     return captured(name,type,{});
                 },game_->GetSelection()==0?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2);
@@ -66,6 +67,7 @@ private:
     ObjectEditor* editor_{};
     wxNotebook* tabs_{};wxChoice* game_{};
     std::string identity_;
+    std::map<std::string,std::string> scopes_;
     const neogff::GffModel* selectedModel_{};
 };
 }

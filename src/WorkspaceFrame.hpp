@@ -16,6 +16,7 @@
 #include "PlaceableEditor.hpp"
 #include "NeoSettings.hpp"
 #include <neoshared/bif/ModFolder.hpp>
+#include "core/GameResourceSession.hpp"
 #include <wx/splitter.h>
 #include <wx/aui/auibook.h>
 #include <array>
@@ -32,6 +33,7 @@ private:
     void selectEditor(std::size_t index);
     void setModFolder(const std::filesystem::path& path);
     bool gamePath(const std::filesystem::path& path) const;
+    neoshared::ResourceResolver captureResources(const std::string& module={});
     bool openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession);
     struct Menu {wxString title;std::unique_ptr<wxMenu> menu;};
     void buildMenus();
@@ -52,6 +54,8 @@ private:
                      const std::vector<std::filesystem::path>& localInputs) const;
     std::array<neomodules::Panel*,kEditorCount> panels() const;
     std::shared_ptr<const neoshared::bif::ModFolder> modFolder_;
+    std::shared_ptr<neomdl::GameResourceSession> resourceSession_;
+    std::map<std::string,neoshared::ResourceResolver> resourceResolvers_;
     neobif::ui::BrowserPanel* browser_{};
     neo2da::ui::EditorPanel* tables_{};
     neossf::ui::SSFEditorPanel* soundsets_{};
