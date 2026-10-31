@@ -33,7 +33,7 @@ ItemData ItemReader::read(const GffStruct& root) {
     }
     item.upgrades=value<GffUInt32Field>(root,"Upgrades");item.charges=value<GffByteField>(root,"Charges",50);
     item.stack=value<GffWordField>(root,"StackSize",1);item.plot=value<GffByteField>(root,"Plot");item.stolen=value<GffByteField>(root,"Stolen")&1u;
-    item.cost=item.plot==1?0:std::max(1u,value<GffUInt32Field>(root,"AddCost"));
+    item.cost=item.plot==1?0:std::max(1u,std::uint32_t(float(value<GffUInt32Field>(root,"AddCost"))));
     item.maximumStack=std::uint16_t(integer("baseitems",item.baseItem,"Stacking"));item.group=std::uint8_t(integer("baseitems",item.baseItem,"StorePanelSort"));
     auto stem=tables_.stringValue("baseitems",item.baseItem,"ItemClass");stem.resize(std::min<std::size_t>(11,stem.size()));
     if(std::uint8_t(integer("baseitems",item.baseItem,"GenderSpecific")))stem+="_m";

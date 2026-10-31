@@ -101,7 +101,7 @@ void ShopPreview::paint(wxPaintEvent&) {
         std::unique_ptr<wxGraphicsContext> dc(wxGraphicsContext::Create(paint));const auto root=renderer_.layoutExtent(extent(*layout_.root()));const auto size=GetClientSize();scale_=std::min(size.x/root.m_width,size.y/root.m_height);offsetX_=(size.x-root.m_width*scale_)/2;offsetY_=(size.y-root.m_height*scale_)/2;dc->Translate(offsetX_,offsetY_);dc->Scale(scale_,scale_);dc->BeginLayer(std::clamp(number(*layout_.root(),"ALPHA",1),0.0,1.0));
         if(field<GffStruct>(*layout_.root(),"BORDER"))border(*dc,*layout_.root(),"BORDER",{0,0,root.m_width,root.m_height});
         else stamp(*dc,string(*layout_.root(),"BACKGROUND"),{0,0,root.m_width,root.m_height},{1,1,1});
-        const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");const Item* selected=nullptr;for(const auto& item:items_)if(std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end()) {selected=&item;break;}
+        const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");const Item* selected=nullptr;for(const auto& item:items_)if(!item.plot&&std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end()) {selected=&item;break;}
         for(const auto& control:controls.allStructs()) {
             const auto tag=string(*control,"TAG");if(tag=="LB_INVITEMS")continue;const auto rect=renderer_.layoutExtent(extent(*control));auto contentRect=rect;
             const auto* bar=field<GffStruct>(*control,"SCROLLBAR");
