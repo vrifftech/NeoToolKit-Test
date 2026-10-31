@@ -2,6 +2,7 @@
 
 #include "ShopPreview.hpp"
 #include "ItemPreview.hpp"
+#include "PlaceableEditor.hpp"
 #include "ObjectPalette.hpp"
 #include <wx/dialog.h>
 #include <functional>
@@ -22,7 +23,7 @@ class BlueprintEditor final : public wxDialog {
 public:
     enum class StockAction {Duplicate,Remove,Infinite};
     struct Actions {
-        std::function<void(const std::string&,const std::string&,const std::string&)> edit;
+        std::function<void(const std::string&,const std::string&,const std::string&,const std::string&)> edit;
         std::function<void(neoshared::ResourceDocument,const neomdl::ResourceResolver&)> addItem;
         std::function<void(StockAction,std::size_t,bool)> stock;
         std::function<void(const std::string&,std::uint16_t)> itemFields;
@@ -34,12 +35,13 @@ public:
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
     void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver);
     void clear();
+    void applyPending() {placeable_->applyPending();}
     void setHistory(bool undo,bool redo);
     void selectInventory(std::size_t index);
 private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
     struct Row {std::string field,label;Kind kind;wxWindow* control;};
-    void buildProperties(std::uint16_t type,bool k2);
+    void buildProperties(std::uint16_t type);
     void commit(std::size_t index);
     void selectStock(int index);
     void addItem();
@@ -60,6 +62,7 @@ private:
     wxComboBox* layout_{};
     ShopPreview* preview_{};
     wxNotebook* previews_{};ItemPreview* itemPreview_{};
+    PlaceableEditor* placeable_{};
     wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* loadPreview_{};
     wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
 };

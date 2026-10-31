@@ -27,7 +27,7 @@ void stripAccelerators(wxMenu& menu) {
 }
 constexpr const char* kEditorPageTitles[kEditorCount]={
     "2DA tables","Soundsets","Talk tables","GFF resources",
-    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor","GUI layouts","Items"
+    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor","GUI layouts","Items","Placeables"
 };
 std::string resourceExtension(const neoshared::ResourceDocument& resource) {
     return editorExtensionForPath(neoshared::pathFromUtf8(resource.fileName));
@@ -45,7 +45,7 @@ void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
     }
 }
 }
-std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_,items_};}
+std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_,items_,placeables_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
@@ -184,7 +184,7 @@ void WorkspaceFrame::captureEditorMenus(std::size_t index) {
         // intentionally omitted while an editor workspace is active.
         if(label.CmpNoCase("Help")==0) {hiddenMenus_[index].emplace_back(menu);continue;}
         if(label=="File") {
-            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module","GUI layout","Item"};
+            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module","GUI layout","Item","Placeable"};
             label=titles[index];
         }
         // All editors' own open remains available; host's Ctrl+O handles all types.
@@ -237,6 +237,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Modules:modules_=createModuleEditorPanel(editors_,context);panel=modules_;break;
     case EditorKind::Gui:guis_=neogui::ui::createEditorPanel(editors_,context);panel=guis_;break;
     case EditorKind::Items:items_=createItemEditorPanel(editors_,context);panel=items_;break;
+    case EditorKind::Placeables:placeables_=createPlaceableEditorPanel(editors_,context);panel=placeables_;break;
     case EditorKind::Textures:textures_=neotpc::ui::createEditorPanel(editors_,context);panel=textures_;break;
     case EditorKind::Archives:
         archives_=neoerf::ui::createEditorPanel(editors_,context);panel=archives_;
@@ -280,6 +281,7 @@ void WorkspaceFrame::destroyEditor(EditorKind kind) {
     case EditorKind::Modules:modules_=nullptr;break;
     case EditorKind::Gui:guis_=nullptr;break;
     case EditorKind::Items:items_=nullptr;break;
+    case EditorKind::Placeables:placeables_=nullptr;break;
     }
     panel->Hide();panel->Destroy();
 }
@@ -416,6 +418,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
     case EditorKind::Gui:ok=guis_->openResource(std::move(resource));break;
     case EditorKind::Items:showEditor(selected);ok=items_->openResource(std::move(resource));break;
+    case EditorKind::Placeables:showEditor(selected);ok=placeables_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
     case EditorKind::Models:
@@ -452,6 +455,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
         case EditorKind::Gff:ok=structured_->openFile(path);break;
         case EditorKind::Gui:ok=guis_->openFile(path);break;
         case EditorKind::Items:showEditor(selected);ok=items_->openFile(path);break;
+        case EditorKind::Placeables:showEditor(selected);ok=placeables_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
         case EditorKind::Models:

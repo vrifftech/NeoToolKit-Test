@@ -1036,6 +1036,7 @@ Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neom
 }
 
 void ModuleEditor::editBlueprint() {
+    if(blueprintEditor_)blueprintEditor_->applyPending();
     const auto& p=placements_.at(objects_->GetSelection());
     const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& k){return p.list==k.list;});
     const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
@@ -1044,9 +1045,10 @@ void ModuleEditor::editBlueprint() {
     auto& resource=openBlueprintResource(resolver(name,kind.type).value(),resolver);blueprintKey_=resourceKey(resource.source);
     if(!blueprintEditor_) {
         BlueprintEditor::Actions actions;
-        actions.edit=[this](const std::string& path,const std::string& value,const std::string& label){
+        actions.edit=[this](const std::string& path,const std::string& type,const std::string& value,const std::string& label){
             rememberSelection();auto& resource=resources_.at(blueprintKey_);
-            resource.model->setValue(path,value);stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);
+            if(blueprintKey_.second==2044)editPlaceableField(*resource.model,path,type,value);else resource.model->setValue(path,value);
+            stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);
             recordEdit("Edit blueprint "+label);requestPreview();
         };
         actions.addItem=[this](ResourceDocument item,const neomdl::ResourceResolver& resolver){
