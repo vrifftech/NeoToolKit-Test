@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ModelDocument.hpp"
+#include "ItemData.hpp"
 #include <GuiRenderer.hpp>
 #include <gff/GFFFile.hpp>
 #include <neotlk/TlkLookup.hpp>
@@ -26,7 +27,7 @@ public:
     bool loaded() const {return bool(textures_);}
     std::string sources() const;
 private:
-    struct Item {std::size_t source{};std::string name,description,icon;unsigned stack{},cost{};int group{};bool infinite{},plot{};};
+    struct Item : ItemData {std::vector<std::size_t> sources;bool infinite{};};
     const neoshared::texture::TextureData& texture(const std::string& name);
     void stamp(wxGraphicsContext& dc,const std::string& name,const wxRect2DDouble& rect,const neomdl::model::Vec3& color,double alpha=1,int turn=0,bool flipX=false,bool flipY=false);
     wxRect2DDouble borderInner(const neogff::GffStruct& record,const std::string& field,wxRect2DDouble rect);
@@ -38,6 +39,7 @@ private:
     neomdl::ResourceResolver resolver_;
     neogff::GffFile layout_;
     neotlk::TlkLookup tlk_;
+    std::unique_ptr<ItemReader> reader_;
     neogui::GuiRenderer renderer_;
     std::vector<Item> items_;
     std::vector<std::pair<wxRect2DDouble,std::size_t>> hits_;

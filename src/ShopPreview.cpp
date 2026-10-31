@@ -16,20 +16,11 @@ using Rect=wxRect2DDouble;
 template<class T> const T* field(const GffStruct& record,const std::string& name) {return dynamic_cast<const T*>(record.GetFieldByLabel(name));}
 int integer(const GffStruct& record,const std::string& name,int initial=0) {const auto* v=field<GffIntField>(record,name);return v?v->value:initial;}
 unsigned byte(const GffStruct& record,const std::string& name,unsigned initial=0) {const auto* v=field<GffByteField>(record,name);return v?v->value:initial;}
-unsigned word(const GffStruct& record,const std::string& name,unsigned initial=0) {const auto* v=field<GffWordField>(record,name);return v?v->value:initial;}
 double number(const GffStruct& record,const std::string& name,double initial=0) {const auto* v=field<GffFloatField>(record,name);return v?v->value:initial;}
 std::string string(const GffStruct& record,const std::string& name) {const auto* v=record.GetFieldByLabel(name);return v?v->GetString():std::string{};}
 neomdl::model::Vec3 color(const GffStruct& record) {const auto* v=field<GffPositionField>(record,"COLOR");return v?neomdl::model::Vec3{v->value[0],v->value[1],v->value[2]}:neomdl::model::Vec3{1,1,1};}
 Rect extent(const GffStruct& record) {
     const auto& e=*field<GffStruct>(record,"EXTENT");return {double(integer(e,"LEFT")),double(integer(e,"TOP")),double(integer(e,"WIDTH")),double(integer(e,"HEIGHT"))};
-}
-std::string localized(const GffStruct& record,const std::string& name,const neotlk::TlkLookup& tlk) {
-    const auto* loc=field<GffLocalizedStringField>(record,name);std::string value;bool embedded=false;
-    if(loc) {
-        for(const auto& sub:loc->substrings)if(unsigned(sub.stringid/2)==tlk.languageId()&&(sub.stringid%2==0||tlk.languageId()==0)) {value=sub.GetString();embedded=true;}
-        if(!embedded&&loc->strref!=0xffffffffu)value=tlk.resolve(loc->strref).value();
-    }
-    return value;
 }
 }
 
@@ -43,7 +34,7 @@ ShopPreview::ShopPreview(wxWindow* parent,std::function<void(std::size_t)> selec
     });
     Bind(wxEVT_MOUSEWHEEL,[this](wxMouseEvent& e){const wxPoint2DDouble point((e.GetX()-offsetX_)/scale_,(e.GetY()-offsetY_)/scale_);const int direction=e.GetWheelRotation()<0?1:-1;if(descriptionRect_.Contains(point))descriptionScroll_=std::clamp(descriptionScroll_+direction*36,0.0,descriptionMaximum_);else firstRow_=std::clamp(firstRow_+direction,0,int(items_.size()));Refresh();});
 }
-void ShopPreview::clear() {textures_.reset();renderer_.clear();items_.clear();hits_.clear();sources_.clear();descriptionRect_={};descriptionScroll_=descriptionMaximum_=0;Refresh();}
+void ShopPreview::clear() {reader_.reset();textures_.reset();renderer_.clear();items_.clear();hits_.clear();sources_.clear();descriptionRect_={};descriptionScroll_=descriptionMaximum_=0;Refresh();}
 const neoshared::texture::TextureData& ShopPreview::texture(const std::string& name) {
     if(const auto* cached=textures_->texture(name))return *cached;
     std::string error;if(!textures_->loadRuntimeTexture(name,resolver_,error))throw std::runtime_error(error);
@@ -54,6 +45,7 @@ void ShopPreview::load(const std::string& layout,const neomdl::ResourceResolver&
     clear();resolver_=resolver;game_=game;renderer_.setK2(game==neomdl::model::GameVersion::Kotor2);tlk_.load(talkTable);renderer_.setLanguage(tlk_.languageId());
     auto source=resolver_(layout,2047).value();layout_.LoadBytes(source.bytes);sources_.push_back(source.fileName+" — "+source.sourceDescription);
     renderer_.setLayout(layout,source.identity.find('#')==std::string::npos);fontScale_=renderer_.fontScale();
+    reader_=std::make_unique<ItemReader>(resolver_,tlk_,game==neomdl::model::GameVersion::Kotor2);
     textures_=neomdl::ModelDocument::emptySceneDocument("shop-preview",layout,game);renderer_.cacheControl(*layout_.root());
     const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");for(const auto& c:controls.allStructs())renderer_.cacheControl(*c);
     if(game==neomdl::model::GameVersion::Kotor1)for(const auto* name:{"lbl_hex_3","lbl_hex_6","lbl_hex_7"})texture(name);
@@ -65,34 +57,32 @@ void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver
     resolver_=resolver;items_.clear();selection_=selected;
     if(!loaded())return;
     markUp_=integer(store,"MarkUp");
-    neomdl::detail::AreaLoadTables tables{resolver,{}};
-    std::map<std::string,GffFile> templates;
+    std::map<std::string,ItemData> templates;std::vector<Item> pending;
     if(const auto* list=field<GffList>(store,"ItemList"))for(std::size_t i=0;i<list->count();++i) {
         const auto& record=*list->GetStruct(i);const auto name=neomdl::resourceKey(string(record,"InventoryRes"));
         auto item=templates.find(name);
         if(item==templates.end()) {
             const auto resource=resolver_(name,2025).value();
-            item=templates.try_emplace(name).first;item->second.LoadBytes(resource.bytes);
+            GffFile file;file.LoadBytes(resource.bytes);item=templates.emplace(name,reader_->read(*file.root())).first;
         }
-        const auto& root=*item->second.root();
-        Item row;row.source=i;row.name=localized(root,"LocalizedName",tlk_);
-        row.description=localized(root,field<GffLocalizedStringField>(root,"DescIdentified")?"DescIdentified":"Description",tlk_);
-        if(row.description.empty())row.description=tlk_.resolve(32172).value();
-        row.stack=word(root,"StackSize",1);row.infinite=(byte(record,"Infinite")&1)!=0;row.plot=byte(root,"Plot")!=0;
-        const auto* cost=field<GffUInt32Field>(root,"AddCost");row.cost=row.plot?0:std::max(1u,cost?cost->value:0);
-        const auto base=std::uint32_t(integer(root,"BaseItem",30));int modelType=0,varies=0,group=0;
-        neomdl::engine2da::getInt(tables.table("baseitems"),int(base),"ModelType",modelType);
-        neomdl::engine2da::getInt(tables.table("baseitems"),int(base),"GenderSpecific",varies);
-        neomdl::engine2da::getInt(tables.table("baseitems"),int(base),"StorePanelSort",group);row.group=std::uint8_t(group);
-        modelType=std::uint8_t(modelType);varies=std::uint8_t(varies);
-        auto variation=byte(root,"ModelVariation",std::max(1u,byte(root,"ModelPart1",1)));
-        if(modelType!=0)variation=modelType==1?byte(root,"TextureVar",1):0;
-        auto itemClass=tables.stringValue("baseitems",base,"ItemClass");itemClass.resize(std::min<std::size_t>(11,itemClass.size()));
-        std::ostringstream icon;icon<<'i'<<itemClass<<(varies?"_m_":"_")<<std::setfill('0')<<std::setw(3)<<variation;row.icon=neomdl::resourceKey(icon.str().substr(0,16));
+        Item row;static_cast<ItemData&>(row)=item->second;row.sources={i};row.infinite=(byte(record,"Infinite")&1)!=0;
         if(!row.plot)texture(row.icon);
-        items_.push_back(std::move(row));
+        pending.push_back(std::move(row));
     }
-    std::stable_sort(items_.begin(),items_.end(),[](const auto& a,const auto& b){return a.group!=b.group?a.group<b.group:a.cost!=b.cost?a.cost<b.cost:a.source>b.source;});Refresh();
+    std::stable_sort(pending.begin(),pending.end(),[](const auto& a,const auto& b){return a.cost>b.cost;});
+    for(auto i=pending.rbegin();i!=pending.rend();++i) {
+        auto incoming=std::move(*i);bool absorbed=false;
+        for(auto& row:items_)if(stackCompatible(row,incoming)) {
+            const auto total=row.stack+incoming.stack;
+            if(total>row.maximumStack) {
+                if(row.maximumStack>row.stack)row.sources.insert(row.sources.end(),incoming.sources.begin(),incoming.sources.end());
+                else if(row.maximumStack<row.stack)incoming.sources.insert(incoming.sources.end(),row.sources.begin(),row.sources.end());
+                row.stack=row.maximumStack;incoming.stack=total-row.maximumStack;
+            } else {row.stack=total;row.sources.insert(row.sources.end(),incoming.sources.begin(),incoming.sources.end());absorbed=true;break;}
+        }
+        if(!absorbed)items_.push_back(std::move(incoming));
+    }
+    std::stable_sort(items_.begin(),items_.end(),[](const auto& a,const auto& b){return a.group<b.group;});Refresh();
 }
 void ShopPreview::stamp(wxGraphicsContext& dc,const std::string& name,const Rect& rect,const neomdl::model::Vec3& tint,double alpha,int turn,bool flipX,bool flipY) {
     renderer_.stamp(dc,name,rect,{tint.x,tint.y,tint.z},alpha,turn,flipX,flipY);
@@ -111,7 +101,7 @@ void ShopPreview::paint(wxPaintEvent&) {
         std::unique_ptr<wxGraphicsContext> dc(wxGraphicsContext::Create(paint));const auto root=renderer_.layoutExtent(extent(*layout_.root()));const auto size=GetClientSize();scale_=std::min(size.x/root.m_width,size.y/root.m_height);offsetX_=(size.x-root.m_width*scale_)/2;offsetY_=(size.y-root.m_height*scale_)/2;dc->Translate(offsetX_,offsetY_);dc->Scale(scale_,scale_);dc->BeginLayer(std::clamp(number(*layout_.root(),"ALPHA",1),0.0,1.0));
         if(field<GffStruct>(*layout_.root(),"BORDER"))border(*dc,*layout_.root(),"BORDER",{0,0,root.m_width,root.m_height});
         else stamp(*dc,string(*layout_.root(),"BACKGROUND"),{0,0,root.m_width,root.m_height},{1,1,1});
-        const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");const Item* selected=nullptr;for(const auto& item:items_)if(int(item.source)==selection_)selected=&item;
+        const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");const Item* selected=nullptr;for(const auto& item:items_)if(std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end()) {selected=&item;break;}
         for(const auto& control:controls.allStructs()) {
             const auto tag=string(*control,"TAG");if(tag=="LB_INVITEMS")continue;const auto rect=renderer_.layoutExtent(extent(*control));auto contentRect=rect;
             const auto* bar=field<GffStruct>(*control,"SCROLLBAR");
@@ -126,7 +116,7 @@ void ShopPreview::paint(wxPaintEvent&) {
                 for(const auto& item:items_)if(!item.plot&&visible++>=firstRow_&&drawn<capacity) {
                     double height=rowHeight+extra;if(remainder!=0) {++height;++y;--remainder;}++drawn;
                     const Rect row(inner.m_x+pad,y,inner.m_width-2*pad,height),icon(row.m_x,row.m_y,rowHeight,rowHeight),caption(row.m_x+rowHeight,row.m_y,row.m_width-rowHeight,rowHeight);
-                    const bool k1=game_==neomdl::model::GameVersion::Kotor1,highlight=int(item.source)==selection_;
+                    const bool k1=game_==neomdl::model::GameVersion::Kotor1,highlight=std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end();
                     const neomdl::model::Vec3 tint=k1?(highlight?neomdl::model::Vec3{0.98f,1,0}:neomdl::model::Vec3{0,0.66f,0.98f}):(highlight?neomdl::model::Vec3{0.7f,0.7f,0.6f}:neomdl::model::Vec3{0.31f,0.25f,0.09f});
                     auto content=border(*dc,proto,highlight?"HILIGHT":"BORDER",caption,tint);
                     content.Intersect(borderInner(proto,highlight?"BORDER":"HILIGHT",caption));
@@ -138,7 +128,7 @@ void ShopPreview::paint(wxPaintEvent&) {
                         const Rect countRect=k1?Rect(icon.m_x,icon.m_y+32*unit,rowHeight-(item.stack>=10?2:1)*unit,24*unit):Rect(icon.GetRight()-width,icon.m_y+17,width+1,20);
                         text(*dc,count,std::to_string(item.stack),countRect,unit);
                     }
-                    hits_.push_back({row,item.source});y+=height+pad;
+                    hits_.push_back({row,item.sources.front()});y+=height+pad;
                 }
                 dc->PopState();
                 if(bar)scrollbar(*dc,*bar,{byte(*control,"LEFTSCROLLBAR",1)?rect.m_x:contentRect.GetRight(),rect.m_y,renderer_.layoutExtent(extent(*bar)).m_width,rect.m_height},int(count),firstRow_,std::min(capacity,int(count)));

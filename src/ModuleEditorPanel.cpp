@@ -1036,7 +1036,7 @@ void ModuleEditor::editBlueprint() {
             else {auto& item=*list.GetStruct(index);const auto* flag=static_cast<const neogff::GffByteField*>(item.GetFieldByLabel("Infinite"));const auto value=(flag?flag->value:0u)&~1u;setField(item,std::make_unique<neogff::GffByteField>("Infinite",std::uint8_t(value|(enabled?1u:0u))));}
             resource.model->gff().dirty(true);stage(resource);fields_->refreshActiveDocument();recordEdit("Edit shop stock");requestPreview();
         };
-        actions.itemFields=[this](const std::string& name,std::uint16_t type){auto resolver=moduleResources();openBlueprintResource(resolver(name,type).value(),resolver);blueprintEditor_->Hide();fields_->SetFocus();};
+        actions.itemFields=[this](const std::string& name,std::uint16_t type){auto resolver=moduleResources();auto& resource=openBlueprintResource(resolver(name,type).value(),resolver);blueprintKey_=resourceKey(resource.source);blueprintEditor_->open(type,game_,resource.source.fileName,*resource.model->gff().root(),resolver,session_,catalog_,localDirectory_);};
         actions.fields=[this]{fields_->activateResource(resources_.at(blueprintKey_).source.identity);fields_->refreshActiveDocument();fields_->SetFocus();};
         actions.save=[this]{saveResources();};actions.package=[this]{packageModule(moduleName_);};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
         blueprintEditor_=new BlueprintEditor(this,std::move(actions));

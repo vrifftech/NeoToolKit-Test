@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ShopPreview.hpp"
+#include "ItemPreview.hpp"
 #include "ObjectPalette.hpp"
 #include <wx/dialog.h>
 #include <functional>
@@ -13,6 +14,7 @@ class wxComboBox;
 class wxStaticText;
 class wxScrolledWindow;
 class wxSplitterWindow;
+class wxNotebook;
 
 namespace neotoolkit {
 
@@ -57,6 +59,7 @@ private:
     wxListCtrl* stock_{};wxCheckBox* infinite_{};
     wxComboBox* layout_{};
     ShopPreview* preview_{};
+    wxNotebook* previews_{};ItemPreview* itemPreview_{};
     wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* loadPreview_{};
     wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
 };

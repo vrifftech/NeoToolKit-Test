@@ -51,7 +51,7 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     stock_->Bind(wxEVT_LIST_ITEM_SELECTED,[this](wxListEvent& e){selectStock(int(e.GetIndex()));});
     stock_->Bind(wxEVT_LIST_ITEM_DESELECTED,[this](wxListEvent&){selectStock(-1);});
     itemFields_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {const auto i=stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);actions_.itemFields(inventory(*root_)->GetStruct(std::size_t(i))->GetFieldByLabel("InventoryRes")->GetString(),2025);}catch(const std::exception& e){wxui::showError(this,e);}});
-    previewPage_=new wxPanel(split);auto* previewBox=new wxBoxSizer(wxVERTICAL);auto* choose=new wxBoxSizer(wxHORIZONTAL);
+    previews_=new wxNotebook(split,wxID_ANY);previewPage_=new wxPanel(previews_);auto* previewBox=new wxBoxSizer(wxVERTICAL);auto* choose=new wxBoxSizer(wxHORIZONTAL);
     layout_=new wxComboBox(previewPage_,wxID_ANY);choose->Add(layout_,1,wxEXPAND|wxALL,4);loadPreview_=new wxButton(previewPage_,wxID_ANY,"Load game GUI");choose->Add(loadPreview_,0,wxALL,4);previewBox->Add(choose,0,wxEXPAND);
     preview_=new ShopPreview(previewPage_,[this](std::size_t i){stock_->SetItemState(long(i),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(i));});previewBox->Add(preview_,1,wxEXPAND|wxALL,4);
     auto* state=new wxWrapSizer(wxHORIZONTAL);
@@ -64,7 +64,8 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     auto* sources=new wxButton(previewPage_,wxID_ANY,"Preview asset sources...");previewBox->Add(sources,0,wxALL,4);
     sources->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){wxDialog d(this,wxID_ANY,"Shop preview sources",wxDefaultPosition,FromDIP(wxSize(700,430)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* s=new wxBoxSizer(wxVERTICAL);s->Add(new wxTextCtrl(&d,wxID_ANY,wxui::toWx(preview_->sources()),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);s->Add(d.CreateButtonSizer(wxOK),0,wxALIGN_RIGHT|wxALL,8);d.SetSizer(s);d.ShowModal();});
     loadPreview_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){loadPreview();});previewPage_->SetSizer(previewBox);
-    split->SetMinimumPaneSize(FromDIP(300));split->SplitVertically(tabs,previewPage_,FromDIP(360));split->SetSashGravity(0.3);box->Add(split,1,wxEXPAND|wxALL,4);SetSizer(box);
+    previews_->AddPage(previewPage_,"Shop preview");itemPreview_=new ItemPreview(previews_,[this]()->const auto&{return *root_;},[this]{return resolver_;});previews_->AddPage(itemPreview_,"Item / 3D preview");
+    split->SetMinimumPaneSize(FromDIP(300));split->SplitVertically(tabs,previews_,FromDIP(360));split->SetSashGravity(0.3);box->Add(split,1,wxEXPAND|wxALL,4);SetSizer(box);
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){Hide();event.Veto();});
 }
 
@@ -115,11 +116,12 @@ void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
     auto* note=new wxStaticText(properties_,wxID_ANY,"Only fields present in the template are enabled. Other fields and translations are available through All fields. For placeables, Open and saved Animation take precedence over AnimationState.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);properties_->FitInside();
 }
 void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
-    if(type_!=type||game_!=game) {buildProperties(type,game==neomdl::model::GameVersion::Kotor2);preview_->clear();type_=type;game_=game;}
+    if(type_!=type||game_!=game) {buildProperties(type,game==neomdl::model::GameVersion::Kotor2);preview_->clear();itemPreview_->clear();type_=type;game_=game;}
     session_=std::move(session);catalog_=std::move(catalog);directory_=directory;SetTitle(wxui::toWx(title));source_->SetLabel(wxui::toWx(title+" — module override; affects instances using this template. Save resources or Package MOD includes edits."));
-    const bool store=type==2051;stockPage_->Enable(store);previewPage_->Enable(store);
-    if(!store&&split_->IsSplit())split_->Unsplit(previewPage_);
-    if(store&&!split_->IsSplit()) {previewPage_->Show();split_->SplitVertically(split_->GetWindow1(),previewPage_,FromDIP(360));}
+    const bool store=type==2051,item=type==2025;stockPage_->Enable(store);previewPage_->Enable(store);itemPreview_->Enable(item);previews_->ChangeSelection(item?1:0);
+    if(!store&&!item&&split_->IsSplit())split_->Unsplit(previews_);
+    if((store||item)&&!split_->IsSplit()) {previews_->Show();split_->SplitVertically(split_->GetWindow1(),previews_,FromDIP(360));}
+    itemPreview_->setContext(session_?session_->installation()->installPath/"dialog.tlk":std::filesystem::path{},game);
     layout_->Clear();if(session_)for(const auto& entry:session_->resources({2047}))layout_->Append(wxui::toWx(entry.resref));
     const bool k1=game==neomdl::model::GameVersion::Kotor1;
     layout_->ChangeValue(k1?"store":"store_p");add_->Enable(bool(session_));loadPreview_->Enable(store&&bool(session_));
@@ -144,6 +146,7 @@ void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceReso
     if(selected>=0&&selected<stock_->GetItemCount())stock_->SetItemState(selected,wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);
     selectStock(selected<stock_->GetItemCount()?int(selected):-1);
     if(type_==2051)try {preview_->setStore(root,resolver_,int(selected));}catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));}
+    if(type_==2025)itemPreview_->refreshItem();
 }
 void BlueprintEditor::commit(std::size_t index) {
     try {
@@ -173,10 +176,10 @@ void BlueprintEditor::loadPreview() {
         const auto& install=*session_->installation();const auto path=neoshared::game::findExistingPathCaseInsensitive(install.installPath/"dialog.tlk");
         const auto game=neoshared::game::gameIdFromString(install.id).value()==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
         preview_->load(wxui::toStd(layout_->GetValue()),resolver_,path,game);preview_->setStore(*root_,resolver_,int(stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED)));
-        previewStatus_->SetLabel("Buy-page preview uses game assets, native item costs, store markup and the preview values above. K1 uses a 1024x768 desktop. Scroll or click a row. Descriptions show identified template text; generated property details, scripts and inventory transactions require the game runtime.");previewStatus_->Wrap(FromDIP(580));
+        previewStatus_->SetLabel("Buy-page preview uses game assets, generated item details and merged stacks. Click a preview row to select its source stock entry. Preview credits and markup do not change the store. K1 uses a 1024x768 desktop.");previewStatus_->Wrap(FromDIP(580));
     } catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));wxui::showError(this,e);}
 }
-void BlueprintEditor::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();Hide();}
+void BlueprintEditor::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();itemPreview_->clear();Hide();}
 void BlueprintEditor::setHistory(bool undo,bool redo) {undo_->Enable(undo);redo_->Enable(redo);}
 void BlueprintEditor::selectInventory(std::size_t index) {stock_->SetItemState(long(index),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(index));}
 

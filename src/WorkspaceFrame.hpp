@@ -12,6 +12,7 @@
 #include "wx/GUIEditorPanel.hpp"
 #include "EditorRouting.hpp"
 #include "ModuleEditorPanel.hpp"
+#include "ItemEditorPanel.hpp"
 #include "NeoSettings.hpp"
 #include <wx/splitter.h>
 #include <wx/aui/auibook.h>
@@ -58,6 +59,7 @@ private:
     neoerf::ui::ERFEditorPanel* archives_{};
     ModuleEditorPanel* modules_{};
     neogui::ui::GUIEditorPanel* guis_{};
+    ItemEditorPanel* items_{};
     wxSplitterWindow* splitter_{};
     wxAuiNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;
