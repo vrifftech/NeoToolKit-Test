@@ -316,7 +316,7 @@ public:
         gridSnap_->Bind(wxEVT_CHOICE,snapping);rotationSnap_->Bind(wxEVT_CHOICE,snapping);walkmeshSnap_->Bind(wxEVT_CHECKBOX,snapping);
         objectTabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
             if(event.GetSelection()!=1)palette_->stopPlacing();
-            if(objectTabs_->GetCurrentPage()==walkmeshPage_||objectTabs_->GetCurrentPage()==roomsPage_)cameraControls_->stopPreview();
+            if(objectTabs_->GetCurrentPage()==walkmeshPage_||objectTabs_->GetCurrentPage()==roomsPage_) {cameraControls_->stopPreview();canvas_->useViewerCamera(false);}
             placingArrival_=false;canvas_->cancelAreaGizmo();canvas_->cancelWalkmeshStroke();configureWalkmesh();updateSnapping();updateActions();
             if(objectTabs_->GetCurrentPage()==roomsPage_)refreshRoomControls();
             event.Skip();

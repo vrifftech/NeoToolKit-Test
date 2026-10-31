@@ -14,13 +14,6 @@
 #include <map>
 
 namespace neotoolkit {
-namespace {
-int localizedId(const neogff::GffLocalizedStringField* field,int selected) {
-    int id=selected;
-    if(selected==0&&field)for(const auto& text:field->substrings)if(text.stringid==0||text.stringid==1)id=text.stringid;
-    return id;
-}
-}
 
 ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
     std::function<void(AreaAction,std::size_t,const std::string&)> areaEdit)
@@ -60,8 +53,7 @@ ModuleControls::ModuleControls(wxWindow* parent,Edit edit,
             auto& r=localized_[index];
             if(r.text->IsModified()) {
                 r.text->DiscardEdits();
-                const auto* field=static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(r.field));
-                const auto id=localizedId(field,r.ids.at(r.language->GetSelection()));
+                const auto id=r.ids.at(r.language->GetSelection());
                 try {edit_(r.field+"(lang"+std::to_string(id)+")","CExoLocString",wxui::toStd(r.text->GetValue()),r.label+" text");}
                 catch(const std::exception& e){wxui::showError(this,e);}
             }
@@ -169,7 +161,7 @@ void ModuleControls::apply(const Row& row) {
 }
 void ModuleControls::showLocalized(std::size_t index) {
     auto& row=localized_[index];const auto* field=root_?static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(row.field)):nullptr;
-    row.text->ChangeValue(field?wxui::toWx(field->GetStringById(localizedId(field,row.ids.at(row.language->GetSelection())))):wxString{});row.text->DiscardEdits();
+    row.text->ChangeValue(field?wxui::toWx(field->GetStringById(row.ids.at(row.language->GetSelection()))):wxString{});row.text->DiscardEdits();
 }
 void ModuleControls::updateAreaActions() {
     const auto selected=areas_->GetSelection();const bool selection=root_&&selected!=wxNOT_FOUND;
