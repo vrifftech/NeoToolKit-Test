@@ -1,5 +1,8 @@
 #include "WorkspaceFrame.hpp"
 #include "NeoViewState.hpp"
+#include "NeoGameDirectoryMenu.hpp"
+#include <wx/dirdlg.h>
+#include <wx/utils.h>
 #include <neoshared/PathUtf8.hpp>
 #include <wx/dnd.h>
 #include <wx/menu.h>
@@ -8,7 +11,7 @@
 #include <utility>
 namespace neotoolkit {
 namespace {
-enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ToggleExplorer, ID_Open, ID_OpenLiveModule };
+enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ToggleExplorer, ID_Open, ID_OpenLiveModule, ID_SetModFolder, ID_RefreshModFolder, ID_ClearModFolder, ID_ModFolderPath };
 class DropTarget final: public wxFileDropTarget {
 public:
     explicit DropTarget(WorkspaceFrame& frame):frame_(frame){}
@@ -60,7 +63,9 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     editors_->Hide();
     browser_->setArchiveOpenHandler([this](const auto& path,auto inputs){
         ensureEditor(EditorKind::Archives);
-        if(archives_->openGameArchive(path,inputs)){
+        const auto replacement=modFolder_?modFolder_->archive(path):std::nullopt;
+        if(replacement)inputs.push_back(*replacement);
+        if(archives_->openGameArchive(replacement?*replacement:path,inputs)){
             for(const auto& input:inputs)if(std::find(protectedInputs_.begin(),protectedInputs_.end(),input)==protectedInputs_.end())protectedInputs_.push_back(input);
             selectEditor(static_cast<std::size_t>(EditorKind::Archives));
         }
@@ -121,6 +126,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     wxui::configureResponsiveWindow(*this,wxSize(1480,900),wxSize(1000,650));
     settings_.restoreWindowPlacement(*this);
     dark_=wxui::readDarkMode("NeoToolKit-Test");fontScale_=settings_.fontScale();applyAppearance();
+    setModFolder(settings_.readPath("Paths/ModFolder").value_or(std::filesystem::path{}));
 }
 WorkspaceFrame::~WorkspaceFrame() {
     // Destroy panels before either attached or inactive menus: game-menu helpers
@@ -128,11 +134,40 @@ WorkspaceFrame::~WorkspaceFrame() {
     menusReady_=false;
     DestroyChildren();browser_=nullptr;tables_=nullptr;soundsets_=nullptr;talkTables_=nullptr;structured_=nullptr;dialogues_=nullptr;journals_=nullptr;models_=nullptr;textures_=nullptr;archives_=nullptr;modules_=nullptr;
 }
+void WorkspaceFrame::setModFolder(const std::filesystem::path& path) {
+    wxBusyCursor busy;
+    auto next=path.empty()?std::shared_ptr<const neoshared::bif::ModFolder>{}:std::make_shared<const neoshared::bif::ModFolder>(path);
+    modFolder_=std::move(next);settings_.writePath("Paths/ModFolder",modFolder_?modFolder_->root():std::filesystem::path{});
+    auto label=modFolder_?neosettings::pathToWx(modFolder_->root()):wxString("None");label.Replace("&","&&");
+    GetMenuBar()->FindItem(ID_ModFolderPath)->SetItemLabel(label);
+    GetMenuBar()->Enable(ID_RefreshModFolder,bool(modFolder_));GetMenuBar()->Enable(ID_ClearModFolder,bool(modFolder_));
+    for(auto* panel:panels())if(panel)panel->resourceContextChanged();
+}
+bool WorkspaceFrame::gamePath(const std::filesystem::path& path) const {
+    const auto inside=[&](const std::filesystem::path& root) {
+        auto file=neoshared::genericPathToUtf8(std::filesystem::absolute(path).lexically_normal());
+        auto folder=neoshared::genericPathToUtf8(std::filesystem::absolute(root).lexically_normal());
+        for(auto& c:file)if(c>='A'&&c<='Z')c=char(c+32);
+        for(auto& c:folder)if(c>='A'&&c<='Z')c=char(c+32);
+        return file.size()>folder.size()&&file.compare(0,folder.size(),folder)==0&&file[folder.size()]=='/';
+    };
+    if(modFolder_&&inside(modFolder_->root()))return false;
+    for(const auto& source:browser_->sourcePaths()) {
+        auto extension=neoshared::pathToUtf8(source.extension());for(auto& c:extension)if(c>='A'&&c<='Z')c=char(c+32);
+        if(extension==".key"&&inside(source.parent_path()))return true;
+    }
+    for(const auto id:{neogames::GameId::Kotor1,neogames::GameId::Kotor2})
+        for(const auto& install:neogames::resolver().settings().readSaved(*neogames::findGame(id)))if(inside(install.installPath))return true;
+    return false;
+}
 void WorkspaceFrame::buildMenus() {
     auto* bar=new wxMenuBar;
     auto* file=new wxMenu;
     file->Append(ID_Open,"Open resource...\tCtrl+O");
     file->Append(ID_OpenLiveModule,"Open Live Module...");
+    auto* mods=new wxMenu;mods->Append(ID_ModFolderPath,"None")->Enable(false);mods->AppendSeparator();
+    mods->Append(ID_SetModFolder,"Set Mod Folder...");mods->Append(ID_RefreshModFolder,"Refresh Mod Folder");mods->Append(ID_ClearModFolder,"Clear Mod Folder");
+    file->AppendSubMenu(mods,"Mod folder");
     auto source=browser_->takeMenus();
     auto* explorer=new wxMenu;
     while(source && source->GetMenuCount()) {
@@ -152,6 +187,12 @@ void WorkspaceFrame::buildMenus() {
     bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;
     bar->Enable(ID_ToggleExplorer,false);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
+    Bind(wxEVT_MENU,[this](wxCommandEvent&){
+        wxDirDialog dialog(this,"Mod resources take priority over installed game resources",modFolder_?neosettings::pathToWx(modFolder_->root()):wxString{},wxDD_DEFAULT_STYLE|wxDD_DIR_MUST_EXIST);
+        if(dialog.ShowModal()==wxID_OK)try {setModFolder(neosettings::pathFromWx(dialog.GetPath()));}catch(const std::exception& e){wxui::showError(this,e);}
+    },ID_SetModFolder);
+    Bind(wxEVT_MENU,[this](wxCommandEvent&){try {setModFolder(modFolder_->root());}catch(const std::exception& e){wxui::showError(this,e);}},ID_RefreshModFolder);
+    Bind(wxEVT_MENU,[this](wxCommandEvent&){setModFolder({});},ID_ClearModFolder);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
             "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gui;*.GUI;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
@@ -222,9 +263,12 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     context.compact=kind==EditorKind::Models||kind==EditorKind::Modules;
     context.validateOutputs=[this](const auto& paths,const auto* owner,const auto& inputs){checkOutputs(paths,owner,inputs);};
     context.resolveResource=[this](const std::string& resref,std::uint16_t type){
+        if(modFolder_&&modFolder_->shadows(resref,type))return modFolder_->resolve(resref,type);
         return browser_->resolveResource(resref,type);
     };
-    context.captureResourceResolver=[this]{return browser_->captureResourceResolver();};
+    context.captureResourceResolver=[this]{return neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver());};
+    context.captureScopedResourceResolver=[this](const std::string& module){return neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);};
+    context.captureModFolder=[this]{return modFolder_;};
     neomodules::Panel* panel=nullptr;
     switch(kind) {
     case EditorKind::Tables:tables_=neo2da::ui::createEditorPanel(editors_,context);panel=tables_;break;
@@ -405,6 +449,14 @@ void WorkspaceFrame::checkOutputs(const std::vector<std::filesystem::path>& path
     neoshared::checkResourceOutputs(paths,inputs,false);
 }
 bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std::string& editor) {
+    const auto relative=modFolder_?resource.sourcePath.lexically_relative(modFolder_->root()):std::filesystem::path{};
+    const bool fromMod=!relative.empty()&&*relative.begin()!="..";
+    if(modFolder_&&!fromMod) {
+        const auto name=neoshared::pathToUtf8(neoshared::pathFromUtf8(resource.fileName).stem());
+        const auto module=neoshared::bif::ModFolder::moduleName(resource.sourcePath);
+        const auto scope=module.empty()?std::optional<std::string>{}:std::optional<std::string>{module};
+        if(auto replacement=modFolder_->openResource(name,resource.type,scope))resource=std::move(*replacement);
+    }
     return openSnapshot(std::move(resource),editor,true);
 }
 bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession) {
@@ -438,7 +490,9 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     }
     return ok;
 }
-void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::string& editor) {
+void WorkspaceFrame::openPath(const std::filesystem::path& input,const std::string& editor) {
+    auto path=input;const bool installed=gamePath(path);
+    if(installed&&modFolder_)if(auto replacement=modFolder_->archive(path))path=*replacement;
     try {
         auto ext=editorExtensionForPath(path);std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
         std::error_code ec;
@@ -446,6 +500,9 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
             if(!editor.empty())throw std::runtime_error("Choose a resource inside the game browser, not an editor for a KEY/directory.");
             browser_->openPath(path);return;
         }
+        if(installed&&modFolder_&&!neoerf::isArchiveExtension(ext))
+            if(const auto type=neoshared::bif::resourceTypeFromExtension(ext,neoshared::bif::GameProfile::KotOR))
+                if(auto resource=modFolder_->openResource(neoshared::pathToUtf8(path.stem()),*type)) {openSnapshot(std::move(*resource),editor,false);return;}
         const auto choices=editorsForExtension(ext);
         if(choices.empty())throw std::runtime_error("Open a game directory, chitin.key, ERF/RIM-family archive, model, table, texture, soundset, talk table, or GFF-backed resource.");
         const auto selected=selectResourceEditor(choices,editor);
@@ -467,7 +524,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& path,const std::strin
             ok=models_->openFile(path);break;
         case EditorKind::Textures:ok=textures_->openFile(path);break;
         case EditorKind::Modules:
-            showEditor(selected);ok=modules_->openFile(path);break;
+            showEditor(selected);ok=modules_->openFile(path,installed);break;
         case EditorKind::Archives: {
             auto sources=browser_->sourcePaths();sources.insert(sources.end(),protectedInputs_.begin(),protectedInputs_.end());
             const bool gameSource=std::any_of(sources.begin(),sources.end(),[&](const auto& input){return neoshared::sameResourcePath(path,input);});

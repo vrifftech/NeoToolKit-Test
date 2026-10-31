@@ -1,4 +1,5 @@
 #include "PlaceableEditor.hpp"
+#include <neoshared/bif/ModFolder.hpp>
 #include "wx/GFFEditorPanel.hpp"
 #include "NeoViewState.hpp"
 #include <wx/button.h>
@@ -38,6 +39,7 @@ public:
     ~ObjectBlueprints() override {DestroyChildren();}
     bool openFile(const std::filesystem::path& path) override {editor_->applyPending();const auto opened=fields_->openFile(path);if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
     bool openResource(neoshared::ResourceDocument source) override {editor_->applyPending();const auto opened=fields_->openResource(std::move(source));if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
+    void resourceContextChanged() override {editor_->applyPending();refresh(true);}
     bool canClose() override {editor_->applyPending();return fields_->canClose();}
     void setAppearance(bool dark,double scale) override {fields_->setAppearance(dark,scale);wxui::applyTheme(editor_,dark);neoview::applyFontScale(editor_,scale);}
     std::vector<std::filesystem::path> openPaths() const override {auto paths=fields_->openPaths();const auto preview=editor_->openPaths();paths.insert(paths.end(),preview.begin(),preview.end());return paths;}
@@ -50,7 +52,9 @@ private:
             if(resources||changed) {
                 auto captured=context_.captureResourceResolver();const auto directory=model->filename().parent_path();
                 auto local=directory.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory);
-                editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local)](const std::string& name,std::uint16_t type) {
+                const auto mod=context_.captureModFolder();
+                editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local),mod](const std::string& name,std::uint16_t type) {
+                    if(mod&&mod->shadows(name,type))return mod->resolve(name,type,{},neomdl::resourceLoadJob());
                     if(local)if(auto source=local(name,type))return source;
                     return captured(name,type,{});
                 },game_->GetSelection()==0?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2);

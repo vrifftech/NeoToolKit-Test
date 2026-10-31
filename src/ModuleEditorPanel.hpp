@@ -8,7 +8,7 @@ namespace neotoolkit {
 class ModuleEditorPanel : public neomodules::Panel {
 public:
     using Panel::Panel;
-    virtual bool openFile(const std::filesystem::path& path)=0;
+    virtual bool openFile(const std::filesystem::path& path,bool installed=false)=0;
     virtual bool openResource(neoshared::ResourceDocument resource)=0;
 };
 
