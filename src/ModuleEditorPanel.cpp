@@ -1793,7 +1793,7 @@ void ModuleEditor::transformPlacement(const Placement& p,const neomdl::PlanarTra
         const auto direction=transform.direction(p.rotation==Placement::Rotation::Entry?entryDirection(fields):Vec3{scalar(fields,x),scalar(fields,y),0});
         setField(record,std::make_unique<neogff::GffFloatField>(x,direction.x));setField(record,std::make_unique<neogff::GffFloatField>(y,direction.y));
     }
-    if(auto* geometry=static_cast<neogff::GffList*>(record.GetFieldByLabel("Geometry"))) {
+    if(p.list=="TriggerList"||p.list=="Encounter List")if(auto* geometry=static_cast<neogff::GffList*>(record.GetFieldByLabel("Geometry"))) {
         const char* x=p.list=="TriggerList"?"PointX":"X",*y=p.list=="TriggerList"?"PointY":"Y",*z=p.list=="TriggerList"?"PointZ":"Z";
         for(auto& vertex:geometry->allStructs()) {
             const auto fields=fieldsOf(*vertex);const auto point=transform.direction({scalar(fields,x),scalar(fields,y),scalar(fields,z)});
