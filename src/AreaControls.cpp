@@ -136,7 +136,11 @@ void AreaControls::load(const neogff::GffStruct* root,bool k2) {
         }
         case Kind::Flag:static_cast<wxCheckBox*>(row.control)->SetValue(std::stoul(value)!=0);break;
         case Kind::WeatherOff:static_cast<wxCheckBox*>(row.control)->SetValue((std::stoul(value)&1u)!=0);break;
-        case Kind::Wind:static_cast<wxChoice*>(row.control)->SetSelection(std::stoi(value));break;
+        case Kind::Wind: {
+            const auto* input=dynamic_cast<const neogff::GffIntField*>(field);
+            const auto wind=static_cast<std::uint8_t>(input?input->value:0);
+            static_cast<wxChoice*>(row.control)->SetSelection(wind<=2?int(wind):wxNOT_FOUND);break;
+        }
         case Kind::Number: {
             const auto scalar=neogff::ParseFloatDecimal(value);
             row.slider->SetRange(int(std::floor(std::min(0.0f,scalar)/row.step)),int(std::ceil(std::max(row.maximum,scalar)/row.step)));
