@@ -82,6 +82,7 @@ void BlueprintEditor::buildProperties(std::uint16_t type,bool k2) {
         }
         rows_.push_back({std::move(field),std::move(label),kind,control});
         if(rows_.back().field=="MarkUp"||rows_.back().field=="MarkDown")control->SetToolTip("Percentage of item cost: 100 means the item cost before trading modifiers.");
+        if(rows_.back().field=="Plot"&&(type==2042||type==2044))control->SetToolTip("Invulnerable takes precedence over Plot when both fields exist. Static objects are always treated as plot.");
     };
     const auto loc=[&](const std::string& field,const std::string& label){add(field,label+" — embedded English",Kind::LocalizedText);add(field,label+" — TLK reference (-1 = none)",Kind::LocalizedRef);};
     add("Tag","Tag");
@@ -129,6 +130,8 @@ void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,co
 void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver) {
     root_=&root;resolver_=std::move(resolver);
     for(auto& row:rows_) {
+        if((type_==2042||type_==2044)&&(row.field=="Plot"||row.field=="Invulnerable"))
+            row.field=dynamic_cast<const neogff::GffByteField*>(root.GetFieldByLabel("Invulnerable"))?"Invulnerable":"Plot";
         const auto* field=root.GetFieldByLabel(row.field);row.control->Enable(field!=nullptr);
         if(row.kind==Kind::Flag)static_cast<wxCheckBox*>(row.control)->SetValue(field&&std::stoul(field->GetString())!=0);
         else if(row.kind==Kind::StoreMode)static_cast<wxChoice*>(row.control)->SetSelection(field?std::stoi(field->GetString())-1:wxNOT_FOUND);
