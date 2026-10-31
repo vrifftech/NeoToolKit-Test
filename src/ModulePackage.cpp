@@ -1,4 +1,5 @@
 #include "ModulePackage.hpp"
+#include "ObjectPalette.hpp"
 #include "NeoWxUi.hpp"
 #include <gff/GFFFile.hpp>
 #include <neoshared/bif/LooseArchiveCatalog.hpp>
@@ -156,16 +157,20 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
             neogff::GffFile file;file.LoadBytes(entry.source.bytes);
             const auto* flag=dynamic_cast<const neogff::GffByteField*>(file.root()->GetFieldByLabel("UseTemplates"));
             const bool templateGit=key.second==2023&&flag&&flag->value!=0;
-            std::function<void(const neogff::GffStruct&,const std::string&)> walk;
-            walk=[&](const neogff::GffStruct& record,const std::string& context) {
-                if(templateGit) {
-                    constexpr std::pair<const char*,std::uint16_t> types[]={{"Creature List",2027},{"Placeable List",2044},{"Door List",2042},{"TriggerList",2032},{"SoundList",2035},{"Encounter List",2040},{"List",2025},{"StoreList",2051}};
-                    for(const auto& [list,type]:types)if(context==list) {
-                        const auto* reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel(type==2051?"ResRef":"TemplateResRef"));
-                        if(reference)add(reference->GetString(),type,resolve,true);
-                        return;
+            std::function<void(const neogff::GffStruct&,const std::string&,bool)> walk;
+            walk=[&](const neogff::GffStruct& record,const std::string& context,bool placement) {
+                if(placement) {
+                    const auto kind=std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return context==value.list;});
+                    if(kind!=kObjectKinds.end()) {
+                        if(record.typeid_!=kind->structure)return;
+                        if(templateGit&&kind->type!=2058) {
+                            const auto* reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel(kind->reference));
+                            if(reference)add(reference->GetString(),kind->type,resolve,true);
+                            return;
+                        }
                     }
-                } else if(context=="Equip_ItemList"||context=="ItemList"||(key.second==2023&&context=="List")) {
+                }
+                if(!templateGit&&(context=="Equip_ItemList"||context=="ItemList"||(key.second==2023&&context=="List"))) {
                     const bool fromTemplate=key.second==2027||key.second==2044||key.second==2051;
                     const auto* reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel(fromTemplate&&context!="Equip_ItemList"?"InventoryRes":"EquippedRes"));
                     if(!fromTemplate&&!reference)reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel("InventoryRes"));
@@ -174,8 +179,8 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                 }
                 for(const auto& field:record.allFields()) {
                     if(const auto* list=dynamic_cast<const neogff::GffList*>(field.get())) {
-                        for(const auto& child:list->allStructs())walk(*child,list->GetLabel());
-                    } else if(const auto* child=dynamic_cast<const neogff::GffStruct*>(field.get()))walk(*child,context);
+                        for(const auto& child:list->allStructs())walk(*child,list->GetLabel(),key.second==2023 && &record==file.root());
+                    } else if(const auto* child=dynamic_cast<const neogff::GffStruct*>(field.get()))walk(*child,context,false);
                     else if(field->fieldtype==neogff::FIELD_TYPE_RESREF) {
                         const auto label=field->GetLabel(),name=field->GetString();
                         if(!templateGit&&label=="Conversation")add(name,2029,resolve,true);
@@ -188,7 +193,7 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                         }
                     }
                 }
-            };walk(*file.root(),{});
+            };walk(*file.root(),{},false);
         }
     }
     ModulePackage result;std::size_t scripts=0,dialogues=0;

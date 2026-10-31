@@ -1347,6 +1347,7 @@ void ModuleEditor::rebuildObjects() {
             if(!camera&&kind==kObjectKinds.end())continue;
             for(std::size_t i=0;i<list->count();++i) {
                 const auto& record=*list->GetStruct(i);
+                if(!camera&&record.typeid_!=kind->structure)continue;
                 const auto fields=fieldsOf(record);
                 Placement p;p.identity=identity;p.list=list->GetLabel();p.index=i;
                 p.path=p.list+"\\"+std::to_string(i);
