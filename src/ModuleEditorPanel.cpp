@@ -60,8 +60,16 @@ using Fields=std::map<std::string,const neogff::GffField*>;
 Fields fieldsOf(const neogff::GffStruct& record) {
     Fields fields;for(const auto& field:record.allFields())fields.emplace(field->GetLabel(),field.get());return fields;
 }
+template<class T> const T* typed(const Fields& fields,const std::string& name) {
+    const auto found=fields.find(name);
+    return found==fields.end()?nullptr:dynamic_cast<const T*>(found->second);
+}
 float scalar(const Fields& fields,const std::string& name) {
-    return dynamic_cast<const neogff::GffFloatField&>(*fields.at(name)).value;
+    const auto* value=typed<neogff::GffFloatField>(fields,name);return value?value->value:0.0f;
+}
+Vec3 entryDirection(const Fields& fields) {
+    const auto* y=typed<neogff::GffFloatField>(fields,"Mod_Entry_Dir_Y");
+    return y?Vec3{scalar(fields,"Mod_Entry_Dir_X"),y->value,0}:Vec3{1,0,0};
 }
 void setField(neogff::GffStruct& record,std::unique_ptr<neogff::GffField> value) {
     auto& fields=record.allFields();
@@ -1334,24 +1342,26 @@ void ModuleEditor::rebuildObjects() {
         for(const auto& field:git->second.model->gff().root()->allFields()) {
             const auto* list=dynamic_cast<const neogff::GffList*>(field.get());
             if(!list)continue;
+            const bool camera=list->GetLabel()=="CameraList";
+            const auto kind=std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& value){return list->GetLabel()==value.list;});
+            if(!camera&&kind==kObjectKinds.end())continue;
             for(std::size_t i=0;i<list->count();++i) {
                 const auto& record=*list->GetStruct(i);
                 const auto fields=fieldsOf(record);
                 Placement p;p.identity=identity;p.list=list->GetLabel();p.index=i;
                 p.path=p.list+"\\"+std::to_string(i);
-                if(fields.count("Position")) {
-                    const auto& point=dynamic_cast<const neogff::GffPositionField&>(*fields.at("Position"));
+                if(camera) {
                     p.coordinates=Placement::Coordinates::Vector;
-                    p.position={point.value[0],point.value[1],point.value[2]};
-                } else if(fields.count("X")||fields.count("XPosition")) {
-                    const bool shortNames=fields.count("X")!=0;
+                    if(const auto* point=typed<neogff::GffPositionField>(fields,"Position"))p.position={point->value[0],point->value[1],point->value[2]};
+                } else {
+                    const bool shortNames=kind->shortCoordinates;
                     p.coordinates=shortNames?Placement::Coordinates::Short:Placement::Coordinates::Long;
                     p.position={scalar(fields,shortNames?"X":"XPosition"),
                         scalar(fields,shortNames?"Y":"YPosition"),scalar(fields,shortNames?"Z":"ZPosition")};
-                } else continue;
-                if(fields.count("Bearing")) {
+                }
+                if(!camera&&kind->bearing) {
                     p.rotation=Placement::Rotation::Bearing;p.heading=scalar(fields,"Bearing")*kDegrees;
-                } else if(fields.count("XOrientation")) {
+                } else if(!camera&&kind->type!=2035&&kind->type!=2040) {
                     p.rotation=Placement::Rotation::Direction;
                     p.heading=std::atan2(-scalar(fields,"XOrientation"),scalar(fields,"YOrientation"))*kDegrees;
                 }
@@ -1366,11 +1376,12 @@ void ModuleEditor::rebuildObjects() {
     const auto ifo=resources_.find({"module",kIfo});
     if(ifo!=resources_.end()) {
         const auto fields=fieldsOf(*ifo->second.model->gff().root());
-        if(neomdl::resourceKey(fields.at("Mod_Entry_Area")->GetString())==areaName()) {
+        const auto* entry=typed<neogff::GffResRefField>(fields,"Mod_Entry_Area");
+        if(entry&&neomdl::resourceKey(entry->GetString())==areaName()) {
             Placement p;p.identity=ifo->second.source.identity;p.path="$entry";p.label="Module entry";
             p.coordinates=Placement::Coordinates::Entry;p.rotation=Placement::Rotation::Entry;
             p.position={scalar(fields,"Mod_Entry_X"),scalar(fields,"Mod_Entry_Y"),scalar(fields,"Mod_Entry_Z")};
-            p.heading=std::atan2(-scalar(fields,"Mod_Entry_Dir_X"),scalar(fields,"Mod_Entry_Dir_Y"))*kDegrees;
+            const auto direction=entryDirection(fields);p.heading=std::atan2(-direction.x,direction.y)*kDegrees;
             placements_.push_back(std::move(p));
         }
     }
@@ -1469,11 +1480,11 @@ void ModuleEditor::applyTransform() {
         }
         if(geometry)setField(record,std::move(geometry));
     }
-    const auto set=[&](const std::string& name,float value) {
-        resource.model->setValue(p.coordinates==Placement::Coordinates::Entry?name:p.path+"\\"+name,decimal(value));
-    };
+    auto& root=*resource.model->gff().root();
+    auto& record=p.coordinates==Placement::Coordinates::Entry?root:*static_cast<neogff::GffList&>(*root.GetFieldByLabel(p.list)).GetStruct(p.index);
+    const auto set=[&](const std::string& name,float value) {setField(record,std::make_unique<neogff::GffFloatField>(name,value));};
     if(p.coordinates==Placement::Coordinates::Vector&&positionChanged)
-        resource.model->setValue(p.path+"\\Position",decimal(values[0])+"|"+decimal(values[1])+"|"+decimal(values[2]));
+        setField(record,std::make_unique<neogff::GffPositionField>("Position",values[0],values[1],values[2]));
     else if(p.coordinates!=Placement::Coordinates::Vector) {
         const char* shortNames[]={"X","Y","Z"};
         const char* longNames[]={"XPosition","YPosition","ZPosition"};
@@ -1487,6 +1498,7 @@ void ModuleEditor::applyTransform() {
         set(p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_X":"XOrientation",-std::sin(heading));
         set(p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_Y":"YOrientation",std::cos(heading));
     }
+    resource.model->gff().dirty(true);
     previewTransform(p,{values[0],values[1],values[2]},rotationChanged?values[3]:p.heading);
     stage(resource);fields_->refreshActiveDocument();rebuildObjects();
     recordEdit(positionChanged?(rotationChanged?"Transform object":"Move object"):"Rotate object");requestPreview();
@@ -1737,8 +1749,7 @@ void ModuleEditor::translatePlacement(const Placement& p,Vec3 offset,bool moveSp
         setField(record,std::move(geometry));
     }
     if(p.coordinates==Placement::Coordinates::Vector) {
-        auto& point=static_cast<neogff::GffPositionField&>(*record.GetFieldByLabel("Position"));
-        for(std::size_t axis=0;axis<3;++axis)if(delta[axis]!=0)point.value[axis]+=delta[axis];
+        setField(record,std::make_unique<neogff::GffPositionField>("Position",p.position.x+offset.x,p.position.y+offset.y,p.position.z+offset.z));
     } else {
         const char* shortNames[]={"X","Y","Z"},*longNames[]={"XPosition","YPosition","ZPosition"},*entryNames[]={"Mod_Entry_X","Mod_Entry_Y","Mod_Entry_Z"};
         const auto labels=p.coordinates==Placement::Coordinates::Entry?entryNames:p.coordinates==Placement::Coordinates::Short?shortNames:longNames;
@@ -1776,7 +1787,8 @@ void ModuleEditor::transformPlacement(const Placement& p,const neomdl::PlanarTra
         setField(record,std::make_unique<neogff::GffFloatField>("Bearing",std::atan2(-direction.x,direction.y)));
     } else if(p.rotation==Placement::Rotation::Direction||p.rotation==Placement::Rotation::Entry) {
         const auto x=p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_X":"XOrientation",y=p.rotation==Placement::Rotation::Entry?"Mod_Entry_Dir_Y":"YOrientation";
-        const auto fields=fieldsOf(record);const auto direction=transform.direction({scalar(fields,x),scalar(fields,y),0});
+        const auto fields=fieldsOf(record);
+        const auto direction=transform.direction(p.rotation==Placement::Rotation::Entry?entryDirection(fields):Vec3{scalar(fields,x),scalar(fields,y),0});
         setField(record,std::make_unique<neogff::GffFloatField>(x,direction.x));setField(record,std::make_unique<neogff::GffFloatField>(y,direction.y));
     }
     if(auto* geometry=static_cast<neogff::GffList*>(record.GetFieldByLabel("Geometry"))) {
@@ -1796,8 +1808,7 @@ void ModuleEditor::transformPlacement(const Placement& p,const neomdl::PlanarTra
         setField(*spawn,std::make_unique<neogff::GffFloatField>("Orientation",std::atan2(direction.x,direction.y)));
     }
     if(p.list=="CameraList") {
-        auto& orientation=static_cast<neogff::GffOrientationField&>(*record.GetFieldByLabel("Orientation"));
-        const auto q=transform.facing({orientation.value[1],orientation.value[2],orientation.value[3],orientation.value[0]});
+        const auto q=transform.facing(cameraControls_->records().at(p.index).orientation);
         setField(record,std::make_unique<neogff::GffOrientationField>("Orientation",q.w,q.x,q.y,q.z));
     }
 }
