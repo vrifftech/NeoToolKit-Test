@@ -12,10 +12,10 @@ template<class T> unsigned value(const GffStruct& root,const std::string& name,u
 std::string numbered(const std::string& prefix,unsigned n,int digits) {std::ostringstream s;s<<prefix<<std::setfill('0')<<std::setw(digits)<<n;return neomdl::resourceKey(s.str().substr(0,16));}
 }
 int ItemReader::integer(const std::string& file,int row,const std::string& column,int initial) {neomdl::engine2da::getInt(tables_.table(file),row,column,initial);return initial;}
-std::string ItemReader::caption(const std::string& file,int row,const std::string& column) {int ref=-1;const bool present=neomdl::engine2da::getInt(tables_.table(file),row,column,ref);return present&&ref>=0?tlk_.resolve(unsigned(ref)).value():std::string{};}
+std::string ItemReader::caption(const std::string& file,int row,const std::string& column,int minimum) {int ref=-1;const bool present=neomdl::engine2da::getInt(tables_.table(file),row,column,ref);return present&&ref>=minimum?tlk_.resolve(unsigned(ref)).value():std::string{};}
 std::string ItemReader::localized(const GffStruct& root,const std::string& name) {
     const auto* f=field<GffLocalizedStringField>(root,name);std::string text;bool embedded=false;
-    if(f) {for(const auto& s:f->substrings)if(unsigned(s.stringid/2)==tlk_.languageId()&&(s.stringid%2==0||tlk_.languageId()==0)) {text=s.GetString();embedded=true;}if(!embedded&&f->strref!=0xffffffffu)text=tlk_.resolve(f->strref).value();}
+    if(f) {for(const auto& s:f->substrings)if(unsigned(s.stringid)==tlk_.languageId()*2) {text=s.GetString();embedded=true;}if(!embedded&&f->strref!=0xffffffffu)text=tlk_.resolve(f->strref).value();}
     return text;
 }
 ItemData ItemReader::read(const GffStruct& root) {
@@ -28,11 +28,11 @@ ItemData ItemReader::read(const GffStruct& root) {
     else {item.modelVariation=value<GffByteField>(root,"ModelPart1",1);if(item.modelVariation==0)item.modelVariation=1;}
     if(item.modelType==1) {
         item.bodyVariation=1;const auto body=tables_.stringValue("baseitems",item.baseItem,"BodyVar");
-        if(body.size()==1&&body[0]>='A'&&body[0]<=(k2_?'Z':'J'))item.bodyVariation=unsigned(body[0]-'@');
+        if(body.size()==1&&body[0]>='A'&&body[0]<='Z')item.bodyVariation=unsigned(body[0]-'@');
         item.textureVariation=value<GffByteField>(root,"TextureVar",1);
     }
     item.upgrades=value<GffUInt32Field>(root,"Upgrades");item.charges=value<GffByteField>(root,"Charges",50);
-    item.stack=value<GffWordField>(root,"StackSize",1);item.plot=value<GffByteField>(root,"Plot");item.stolen=value<GffByteField>(root,"Stolen");
+    item.stack=value<GffWordField>(root,"StackSize",1);item.plot=value<GffByteField>(root,"Plot");item.stolen=value<GffByteField>(root,"Stolen")&1u;
     item.cost=item.plot==1?0:std::max(1u,value<GffUInt32Field>(root,"AddCost"));
     item.maximumStack=std::uint16_t(integer("baseitems",item.baseItem,"Stacking"));item.group=std::uint8_t(integer("baseitems",item.baseItem,"StorePanelSort"));
     auto stem=tables_.stringValue("baseitems",item.baseItem,"ItemClass");stem.resize(std::min<std::size_t>(11,stem.size()));
@@ -48,6 +48,7 @@ ItemData ItemReader::read(const GffStruct& root) {
         if(record->allFields().empty())continue;
         ItemProperty p;p.fields={value<GffWordField>(*record,"PropertyName"),value<GffWordField>(*record,"Subtype"),value<GffByteField>(*record,"CostTable"),value<GffWordField>(*record,"CostValue"),value<GffByteField>(*record,"Param1"),value<GffByteField>(*record,"Param1Value"),value<GffByteField>(*record,"UsesPerDay",255),value<GffByteField>(*record,"UpgradeType",255)};
         p.active=p.type()==10||p.type()==37||p.type()==46||p.type()==53;
+        if(p.type()==10&&p.fields[6]==255&&p.value()>=8&&p.value()<=12)p.fields[6]=p.value()-7;
         p.enabled=p.fields[7]==255||(item.upgrades&(1u<<(p.fields[7]&31)));
         item.properties.push_back(p);
     }
@@ -66,7 +67,7 @@ std::string ItemReader::propertyText(const ItemProperty& p) {
     const auto append=[&](const std::string& s){if(!s.empty()) {if(!text.empty())text+=": ";text+=s;}};
     if(!subTable.empty())append(caption(neomdl::resourceKey(subTable),int(p.subtype())));
     int cost=-1;
-    if(p.value()!=0xffff&&neomdl::engine2da::getInt(definitions,int(p.type()),"CostTableResRef",cost)) {const auto table=tables_.stringValue("iprp_costtable",std::uint8_t(cost),"Name");append(caption(neomdl::resourceKey(table),int(p.value())));}
+    if(p.value()!=0xffff&&neomdl::engine2da::getInt(definitions,int(p.type()),"CostTableResRef",cost)) {const auto table=tables_.stringValue("iprp_costtable",std::uint8_t(cost),"Name");append(caption(neomdl::resourceKey(table),int(p.value()),"Name",k2_?1:0));}
     if(p.fields[5]!=255) {
         int param=-1;bool present=neomdl::engine2da::getInt(definitions,int(p.type()),"Param1ResRef",param);
         if(!present&&!subTable.empty())present=neomdl::engine2da::getInt(tables_.table(neomdl::resourceKey(subTable)),int(p.subtype()),"Param1ResRef",param);
@@ -103,6 +104,7 @@ std::string ItemReader::details(const ItemData& item) {
         if(k2_)low=std::max(1,low);
         std::string damageType;if(damage&7)damageType=label(38552);
         for(unsigned bit=3;bit<=12;++bit)if(damage&(1u<<bit)) {if(!damageType.empty())damageType+=", ";damageType+=label(38553+bit-3);}
+        if(damage&0x2000) {if(!damageType.empty())damageType+=", ";damageType+=label(41903);}
         if(has(31))line(31385,k2_?"1":"0");
         else if(!k2_||high!=0)line(31385,(damageType.empty()?"":damageType+", ")+(k2_&&item.baseItem==45?"+"+std::to_string(high):std::to_string(low)+"-"+std::to_string(high)));
         if(std::uint8_t(base("RangedWeapon"))) {float range=0;neomdl::engine2da::getFloat(tables_.table("baseitems"),item.baseItem,"MaxAttackRange",range);line(38565,std::to_string(int(range))+"m");}

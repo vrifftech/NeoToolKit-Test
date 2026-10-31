@@ -19,7 +19,6 @@
 namespace neotoolkit {
 namespace {
 const neogff::GffList* inventory(const neogff::GffStruct& root) {return static_cast<const neogff::GffList*>(root.GetFieldByLabel("ItemList"));}
-int englishId(const neogff::GffLocalizedStringField* field) {int id=0;if(field)for(const auto& text:field->substrings)if(text.stringid==0||text.stringid==1)id=text.stringid;return id;}
 }
 
 BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
@@ -135,7 +134,7 @@ void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceReso
         else if(row.kind==Kind::StoreMode)static_cast<wxChoice*>(row.control)->SetSelection(field?std::stoi(field->GetString())-1:wxNOT_FOUND);
         else {
             auto* text=static_cast<wxTextCtrl*>(row.control);std::string value;
-            if(row.kind==Kind::LocalizedText) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);if(loc)value=loc->GetStringById(englishId(loc));}
+            if(row.kind==Kind::LocalizedText) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);if(loc)value=loc->GetStringById(0);}
             else if(row.kind==Kind::LocalizedRef) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);value=loc&&loc->strref!=0xffffffffu?std::to_string(loc->strref):"-1";}
             else if(field)value=field->GetString();
             text->ChangeValue(wxui::toWx(value));text->DiscardEdits();
@@ -154,7 +153,7 @@ void BlueprintEditor::commit(std::size_t index) {
         if(row.kind==Kind::Flag)value=static_cast<wxCheckBox*>(row.control)->GetValue()?"1":"0";
         else if(row.kind==Kind::StoreMode)value=std::to_string(static_cast<wxChoice*>(row.control)->GetSelection()+1);
         else {auto* text=static_cast<wxTextCtrl*>(row.control);text->DiscardEdits();value=wxui::toStd(text->GetValue());
-            if(row.kind==Kind::LocalizedRef)path+="(strref)";else if(row.kind==Kind::LocalizedText)path+="(lang"+std::to_string(englishId(static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(row.field))))+")";
+            if(row.kind==Kind::LocalizedRef)path+="(strref)";else if(row.kind==Kind::LocalizedText)path+="(lang0)";
         }
         actions_.edit(path,value,row.label);
     } catch(const std::exception& e){wxui::showError(this,e);}

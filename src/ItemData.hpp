@@ -27,7 +27,7 @@ public:
     ItemData read(const neogff::GffStruct&);
 private:
     int integer(const std::string& file,int row,const std::string& column,int initial=0);
-    std::string caption(const std::string& file,int row,const std::string& column="Name");
+    std::string caption(const std::string& file,int row,const std::string& column="Name",int minimum=0);
     std::string localized(const neogff::GffStruct&,const std::string&);
     std::string propertyText(const ItemProperty&);
     std::pair<int,int> damageRange(unsigned);
