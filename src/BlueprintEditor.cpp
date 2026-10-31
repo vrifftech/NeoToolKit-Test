@@ -9,10 +9,12 @@
 #include <wx/scrolwin.h>
 #include <wx/sizer.h>
 #include <wx/splitter.h>
+#include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/wrapsizer.h>
 #include <algorithm>
+#include <limits>
 
 namespace neotoolkit {
 namespace {
@@ -52,6 +54,12 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     previewPage_=new wxPanel(split);auto* previewBox=new wxBoxSizer(wxVERTICAL);auto* choose=new wxBoxSizer(wxHORIZONTAL);
     layout_=new wxComboBox(previewPage_,wxID_ANY);choose->Add(layout_,1,wxEXPAND|wxALL,4);loadPreview_=new wxButton(previewPage_,wxID_ANY,"Load game GUI");choose->Add(loadPreview_,0,wxALL,4);previewBox->Add(choose,0,wxEXPAND);
     preview_=new ShopPreview(previewPage_,[this](std::size_t i){stock_->SetItemState(long(i),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(i));});previewBox->Add(preview_,1,wxEXPAND|wxALL,4);
+    auto* state=new wxWrapSizer(wxHORIZONTAL);
+    const auto stateValue=[&](const char* label,int minimum){state->Add(new wxStaticText(previewPage_,wxID_ANY,label),0,wxALIGN_CENTER_VERTICAL|wxALL,4);auto* value=new wxSpinCtrl(previewPage_,wxID_ANY,"0",wxDefaultPosition,FromDIP(wxSize(105,-1)),wxSP_ARROW_KEYS,minimum,std::numeric_limits<int>::max(),0);state->Add(value,0,wxALL,4);return value;};
+    auto* credits=stateValue("Preview credits",0);auto* bonus=stateValue("Bonus markup %",std::numeric_limits<int>::min());auto* onHand=stateValue("Selected item on hand",0);
+    const auto updateState=[this,credits,bonus,onHand](wxCommandEvent&){preview_->setPlayerState(unsigned(credits->GetValue()),bonus->GetValue(),unsigned(onHand->GetValue()));};
+    for(auto* value:{credits,bonus,onHand})value->Bind(wxEVT_TEXT,updateState);
+    previewBox->Add(state,0,wxEXPAND);
     previewStatus_=new wxStaticText(previewPage_,wxID_ANY,"Choose Game resources in the module editor to load the shop's GUI, textures and font atlas.");previewStatus_->Wrap(FromDIP(600));previewBox->Add(previewStatus_,0,wxEXPAND|wxALL,6);
     auto* sources=new wxButton(previewPage_,wxID_ANY,"Preview asset sources...");previewBox->Add(sources,0,wxALL,4);
     sources->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){wxDialog d(this,wxID_ANY,"Shop preview sources",wxDefaultPosition,FromDIP(wxSize(700,430)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* s=new wxBoxSizer(wxVERTICAL);s->Add(new wxTextCtrl(&d,wxID_ANY,wxui::toWx(preview_->sources()),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);s->Add(d.CreateButtonSizer(wxOK),0,wxALIGN_RIGHT|wxALL,8);d.SetSizer(s);d.ShowModal();});
@@ -165,7 +173,7 @@ void BlueprintEditor::loadPreview() {
         const auto& install=*session_->installation();const auto path=neoshared::game::findExistingPathCaseInsensitive(install.installPath/"dialog.tlk");
         const auto game=neoshared::game::gameIdFromString(install.id).value()==neoshared::game::GameId::Kotor1?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
         preview_->load(wxui::toStd(layout_->GetValue()),resolver_,path,game);preview_->setStore(*root_,resolver_,int(stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED)));
-        previewStatus_->SetLabel("Game GUI, textures and font atlas: static shop stock / buy-page layout. Scroll or click a row. Descriptions show template text; generated property details, player pricing/inventory, scripts and runtime item merging are not simulated.");previewStatus_->Wrap(FromDIP(580));
+        previewStatus_->SetLabel("Buy-page preview uses game assets, native item costs, store markup and the preview values above. K1 uses a 1024x768 desktop. Scroll or click a row. Descriptions show identified template text; generated property details, scripts and inventory transactions require the game runtime.");previewStatus_->Wrap(FromDIP(580));
     } catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));wxui::showError(this,e);}
 }
 void BlueprintEditor::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();Hide();}
