@@ -478,6 +478,7 @@ public:
     }
     std::vector<std::filesystem::path> openPaths() const override {return inputs_;}
     bool canClose() override {
+        if(blueprintEditor_)blueprintEditor_->applyPending();
         canvas_->cancelWalkmeshStroke();
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
@@ -795,8 +796,9 @@ private:
     neomdl::ResourceResolver moduleResources() const;
     Resource& openBlueprintResource(ResourceDocument source,const neomdl::ResourceResolver& resolver);
     void editBlueprint();
-    void refreshBlueprintEditor();
-    bool blueprintChanged(const EditState& state) const;
+    void refreshBlueprintEditor(bool itemsChanged);
+    bool blueprintChanged(const EditState& state,bool& itemsChanged) const;
+    bool exportsResource(const Key& key) const {return editableResource(key.second)||addedTemplates_.count(key)!=0;}
     void saved() {
         for(const auto& [key,resource]:resources_)savedBytes_[key]=resource.snapshot;
         savedTemplateBytes_.clear();for(const auto& [key,source]:addedTemplates_)
@@ -1047,7 +1049,7 @@ void ModuleEditor::editBlueprint() {
         BlueprintEditor::Actions actions;
         actions.edit=[this](const std::string& path,const std::string& type,const std::string& value,const std::string& label){
             rememberSelection();auto& resource=resources_.at(blueprintKey_);
-            if(blueprintKey_.second==2044)editPlaceableField(*resource.model,path,type,value);else resource.model->setValue(path,value);
+            if(blueprintKey_.second==2044||blueprintKey_.second==2027)editBlueprintField(*resource.model,path,type,value);else resource.model->setValue(path,value);
             stage(resource);fields_->activateResource(resource.source.identity);fields_->refreshActiveDocument();fields_->selectField(path);
             recordEdit("Edit blueprint "+label);requestPreview();
         };
@@ -1074,14 +1076,17 @@ void ModuleEditor::editBlueprint() {
     wxui::applyTheme(blueprintEditor_,dark_);rememberSelection();updateActions();
 }
 
-void ModuleEditor::refreshBlueprintEditor() {
-    if(blueprintEditor_&&blueprintEditor_->IsShown())blueprintEditor_->refresh(*resources_.at(blueprintKey_).model->gff().root(),moduleResources());
+void ModuleEditor::refreshBlueprintEditor(bool itemsChanged) {
+    if(blueprintEditor_&&blueprintEditor_->IsShown())blueprintEditor_->refresh(*resources_.at(blueprintKey_).model->gff().root(),moduleResources(),itemsChanged);
 }
 
-bool ModuleEditor::blueprintChanged(const EditState& state) const {
-    return blueprintEditor_&&blueprintEditor_->IsShown()&&std::any_of(resources_.begin(),resources_.end(),[&](const auto& entry){
-        return (entry.first==blueprintKey_||entry.first.second==2025)&&entry.second.source.bytes!=*state.bytes.at(entry.first);
-    });
+bool ModuleEditor::blueprintChanged(const EditState& state,bool& itemsChanged) const {
+    itemsChanged=false;bool changed=false;
+    if(blueprintEditor_&&blueprintEditor_->IsShown())for(const auto& entry:resources_)
+        if((entry.first==blueprintKey_||entry.first.second==2025)&&entry.second.source.bytes!=*state.bytes.at(entry.first)) {
+            changed=true;if(entry.first.second==2025)itemsChanged=true;
+        }
+    return changed;
 }
 
 EditState ModuleEditor::captureEdit(const std::string& action) const {
@@ -1138,11 +1143,11 @@ void ModuleEditor::recordEdit(const std::string& action) {
     const bool sameTemplates=state.templates.size()==current.templates.size()&&std::equal(state.templates.begin(),state.templates.end(),current.templates.begin(),
         [](const auto& a,const auto& b){return a.first==b.first&&a.second.bytes==b.second.bytes;});
     if(state.bytes==current.bytes&&state.walkmeshes==current.walkmeshes&&state.imports==current.imports&&sameTemplates)return;
-    const bool blueprint=blueprintChanged(current);
+    bool itemsChanged;const bool blueprint=blueprintChanged(current,itemsChanged);
     history_.erase(history_.begin()+historyIndex_+1,history_.end());
     history_.push_back(std::move(state));++historyIndex_;
     updateDirty();updateActions();
-    if(blueprint)refreshBlueprintEditor();
+    if(blueprint)refreshBlueprintEditor(itemsChanged);
 }
 
 void ModuleEditor::restoreEdit(std::size_t index) {
@@ -1160,7 +1165,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
         ++before;++after;
     }
     const bool spatialOnly=previewCurrent_&&!requested_&&!loading_.valid()&&state.area==areaName()&&state.bytes==current.bytes&&state.imports==current.imports&&sameModels;
-    const bool blueprint=blueprintChanged(state);
+    bool itemsChanged;const bool blueprint=blueprintChanged(state,itemsChanged);
     selecting_=true;
     for(auto& [key,resource]:resources_) {
         if(resource.source.bytes!=*state.bytes.at(key)) {
@@ -1185,7 +1190,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     if(selected!=wxNOT_FOUND&&placements_[selected].identity==state.identity)selectObject(selected,true);
     selecting_=false;restoreWalkmeshes();
     if(spatialOnly) {restoreRoomVisibility();updateActions();}else requestPreview();
-    if(blueprint)refreshBlueprintEditor();
+    if(blueprint)refreshBlueprintEditor(itemsChanged);
     setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
 }
 
@@ -2545,6 +2550,7 @@ void ModuleEditor::tick() {
 }
 
 bool ModuleEditor::saveResources() {
+    if(blueprintEditor_)blueprintEditor_->applyPending();
     wxDirDialog dialog(this,"Save module resources and imported templates to a working folder",{},wxDD_DEFAULT_STYLE);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
@@ -2561,6 +2567,7 @@ bool ModuleEditor::saveResources() {
 }
 
 bool ModuleEditor::saveArchive() {
+    if(blueprintEditor_)blueprintEditor_->applyPending();
     const auto ext=neoshared::pathToUtf8(archivePath_.extension());
     const auto name=neoshared::pathToUtf8(archivePath_.stem())+"_edited"+ext;
     wxFileDialog dialog(this,"Save edited module archive copy",{},wxui::toWx(name),
@@ -2582,6 +2589,7 @@ bool ModuleEditor::saveArchive() {
 }
 
 bool ModuleEditor::packageModule(const std::string& outputName) {
+    if(blueprintEditor_)blueprintEditor_->applyPending();
     std::vector<std::filesystem::path> archives;
     const auto addArchive=[&](const std::filesystem::path& path) {
         if(std::find(archives.begin(),archives.end(),path)==archives.end())archives.push_back(path);

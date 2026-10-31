@@ -61,7 +61,8 @@ private:
     ModuleEditorPanel* modules_{};
     neogui::ui::GUIEditorPanel* guis_{};
     ItemEditorPanel* items_{};
-    PlaceableEditorPanel* placeables_{};
+    ObjectEditorPanel* placeables_{};
+    ObjectEditorPanel* creatures_{};
     wxSplitterWindow* splitter_{};
     wxAuiNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;

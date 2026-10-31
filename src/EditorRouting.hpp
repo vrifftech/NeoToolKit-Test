@@ -11,9 +11,9 @@
 #include <vector>
 namespace neotoolkit {
 enum class EditorKind : std::size_t {
-    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives, Modules, Gui, Items, Placeables
+    Tables, Soundsets, TalkTables, Gff, Dialogues, Journals, Models, Textures, Archives, Modules, Gui, Items, Placeables, Creatures
 };
-inline constexpr std::size_t kEditorCount=13;
+inline constexpr std::size_t kEditorCount=14;
 struct EditorChoice { EditorKind kind; std::string id; std::string label; };
 inline std::string editorExtensionForPath(const std::filesystem::path& path) {
     return neomdl::asciiModelSuffix(path) ? ".mdl" : neoshared::pathToUtf8(path.extension());
@@ -41,6 +41,8 @@ inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
                            {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(ext==".uti")return {{EditorKind::Items,"item","Open with Item Editor"},
                             {EditorKind::Gff,"neogff","Open with NeoGFF"}};
+    if(ext==".utc")return {{EditorKind::Creatures,"creature","Open with Creature Editor"},
+                           {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(ext==".utp")return {{EditorKind::Placeables,"placeable","Open with Placeable Editor"},
                            {EditorKind::Gff,"neogff","Open with NeoGFF"}};
     if(neogff::isKnownGffResourceExtension(ext))return {{EditorKind::Gff,"neogff","Open with NeoGFF"}};

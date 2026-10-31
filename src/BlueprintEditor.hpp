@@ -33,9 +33,9 @@ public:
     void open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
         neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
-    void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver);
+    void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged=false);
     void clear();
-    void applyPending() {placeable_->applyPending();}
+    void applyPending() {if(object_)object_->applyPending();}
     void setHistory(bool undo,bool redo);
     void selectInventory(std::size_t index);
 private:
@@ -62,7 +62,7 @@ private:
     wxComboBox* layout_{};
     ShopPreview* preview_{};
     wxNotebook* previews_{};ItemPreview* itemPreview_{};
-    PlaceableEditor* placeable_{};
+    ObjectEditor* object_{};
     wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* loadPreview_{};
     wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
 };
