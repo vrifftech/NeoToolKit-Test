@@ -98,7 +98,7 @@ Rect ShopPreview::borderInner(const GffStruct& record,const std::string& label,R
 Rect ShopPreview::border(wxGraphicsContext& dc,const GffStruct& record,const std::string& label,Rect rect,std::optional<neomdl::model::Vec3> tint) {
     return renderer_.border(dc,record,label,rect,tint?std::optional<neogui::Color>{{tint->x,tint->y,tint->z}}:std::nullopt);
 }
-void ShopPreview::scrollbar(wxGraphicsContext& dc,const GffStruct& style,Rect rect,int count,int top,int visible) {renderer_.scrollbar(dc,style,rect,count,top,visible);}
+void ShopPreview::scrollbar(wxGraphicsContext& dc,const GffStruct& style,Rect rect,int count,int top,int visible) {renderer_.scrollbar(dc,style,rect,std::max(1,count-visible+1),count?top:1,count?visible:1);}
 void ShopPreview::text(wxGraphicsContext& dc,const GffStruct& style,const std::string& value,Rect rect,double scale,std::optional<neomdl::model::Vec3> tint) {
     renderer_.text(dc,style,value,rect,scale,tint?std::optional<neogui::Color>{{tint->x,tint->y,tint->z}}:std::nullopt);
 }
