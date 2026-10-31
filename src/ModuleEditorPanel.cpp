@@ -1516,7 +1516,7 @@ void ModuleEditor::duplicateObject() {
         for(const auto& camera:cameraControls_->records())ids.insert(camera.cameraId);
         std::int32_t id=0;while(ids.count(id))++id;
         setField(static_cast<neogff::GffStruct&>(*copy),std::make_unique<neogff::GffIntField>("CameraID",id));
-    }
+    } else setField(static_cast<neogff::GffStruct&>(*copy),std::make_unique<neogff::GffUInt32Field>("ObjectId",0x7f000000u));
     selectedPath_=p.list+"\\"+std::to_string(list.count());
     list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));resource.model->gff().dirty(true);
     stage(resource);fields_->refreshActiveDocument();rebuildObjects();recordEdit("Duplicate object");requestPreview();
@@ -1627,6 +1627,7 @@ void ModuleEditor::insertObject(Vec3 position,const ObjectPlacementOptions& opti
         }
     }
     instance->typeid_=kind.structure;
+    setField(*instance,std::make_unique<neogff::GffUInt32Field>("ObjectId",0x7f000000u));
     const auto reference=templates&&kind.type!=2058?importTemplate(blueprint,resolver):resourceKey(blueprint).first;
     if(!templates) {importItemReferences(*instance,resolver,false);inlineSources_.emplace(blueprint.identity,ModulePackageInput{blueprint,resolver});}
     setField(*instance,std::make_unique<neogff::GffResRefField>(kind.reference,reference));
