@@ -154,10 +154,24 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                 for(const auto type:{2010,2029,2025,2027,2032,2035,2040,2042,2044,2051,2058})add(name,std::uint16_t(type),resolve,false);
         } else if(std::find(gffTypes.begin(),gffTypes.end(),key.second)!=gffTypes.end()) {
             neogff::GffFile file;file.LoadBytes(entry.source.bytes);
-            const auto* flag=static_cast<const neogff::GffByteField*>(file.root()->GetFieldByLabel("UseTemplates"));
+            const auto* flag=dynamic_cast<const neogff::GffByteField*>(file.root()->GetFieldByLabel("UseTemplates"));
             const bool templateGit=key.second==2023&&flag&&flag->value!=0;
             std::function<void(const neogff::GffStruct&,const std::string&)> walk;
             walk=[&](const neogff::GffStruct& record,const std::string& context) {
+                if(templateGit) {
+                    constexpr std::pair<const char*,std::uint16_t> types[]={{"Creature List",2027},{"Placeable List",2044},{"Door List",2042},{"TriggerList",2032},{"SoundList",2035},{"Encounter List",2040},{"List",2025},{"StoreList",2051}};
+                    for(const auto& [list,type]:types)if(context==list) {
+                        const auto* reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel(type==2051?"ResRef":"TemplateResRef"));
+                        if(reference)add(reference->GetString(),type,resolve,true);
+                        return;
+                    }
+                } else if(context=="Equip_ItemList"||context=="ItemList"||(key.second==2023&&context=="List")) {
+                    const bool fromTemplate=key.second==2027||key.second==2044||key.second==2051;
+                    const auto* reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel(fromTemplate&&context!="Equip_ItemList"?"InventoryRes":"EquippedRes"));
+                    if(!fromTemplate&&!reference)reference=dynamic_cast<const neogff::GffResRefField*>(record.GetFieldByLabel("InventoryRes"));
+                    if(reference)add(reference->GetString(),2025,resolve,true);
+                    if(fromTemplate||reference)return;
+                }
                 for(const auto& field:record.allFields()) {
                     if(const auto* list=dynamic_cast<const neogff::GffList*>(field.get())) {
                         for(const auto& child:list->allStructs())walk(*child,list->GetLabel());
@@ -168,13 +182,8 @@ ModulePackage collectModulePackage(const ModulePackageSources& sources,const Pat
                         else if(!templateGit&&(key.second!=2029||game==neomdl::model::GameVersion::Kotor2||(label!="Script2"&&label!="Active2"))&&
                             (label.find("Script")==0||label.find("Mod_On")==0||label.find("On")==0||
                             (key.second==2029&&(label=="Active"||label=="Active2"||label=="EndConversation"||label=="EndConverAbort"))))add(name,2010,resolve,true);
-                        else if(!templateGit&&(label=="EquippedRes"||label=="InventoryRes"))add(name,2025,resolve,true);
                         else if(!templateGit&&((context=="CreatureList"&&label=="ResRef")||label=="SpawnResRef"))add(name,2027,resolve,true);
-                        else if(templateGit&&context=="StoreList"&&label=="ResRef")add(name,2051,resolve,true);
-                        else if(templateGit&&label=="TemplateResRef") {
-                            constexpr std::pair<const char*,std::uint16_t> types[]={{"Creature List",2027},{"Placeable List",2044},{"Door List",2042},{"TriggerList",2032},{"SoundList",2035},{"Encounter List",2040},{"List",2025}};
-                            for(const auto& [list,type]:types)if(context==list)add(name,type,resolve,true);
-                        } else if(key.second==2014&&(label=="Area_Name"||label=="Mod_Entry_Area")) {
+                        else if(key.second==2014&&(label=="Area_Name"||label=="Mod_Entry_Area")) {
                             add(name,2012,resolve,true);add(name,2023,resolve,true);add(name,3000,resolve,false);add(name,3001,resolve,false);
                         }
                     }
