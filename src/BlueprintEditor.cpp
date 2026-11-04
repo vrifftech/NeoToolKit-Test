@@ -1,3 +1,4 @@
+#include <gff/GffText.hpp>
 #include "BlueprintEditor.hpp"
 #include "NeoWxUi.hpp"
 #include <wx/button.h>
@@ -145,9 +146,9 @@ void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceReso
         else if(row.kind==Kind::StoreMode)static_cast<wxChoice*>(row.control)->SetSelection(field?std::stoi(field->GetString())-1:wxNOT_FOUND);
         else {
             auto* text=static_cast<wxTextCtrl*>(row.control);std::string value;
-            if(row.kind==Kind::LocalizedText) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);if(loc)value=loc->GetStringById(0);}
+            if(row.kind==Kind::LocalizedText) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);if(loc)value=neogff::decodeGffText(loc->GetStringById(0));}
             else if(row.kind==Kind::LocalizedRef) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);value=loc&&loc->strref!=0xffffffffu?std::to_string(loc->strref):"-1";}
-            else if(field)value=field->GetString();
+            else if(field)value=neogff::decodeGffText(field->GetString());
             text->ChangeValue(wxui::toWx(value));text->DiscardEdits();
         }
     }

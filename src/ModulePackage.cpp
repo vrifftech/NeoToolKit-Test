@@ -59,7 +59,7 @@ std::optional<ModulePackageSources> chooseModulePackageSources(wxWindow* parent,
     auto* buttons=new wxWrapSizer(wxHORIZONTAL);
     auto* add=new wxButton(&dialog,wxID_ANY,"Add archives...");buttons->Add(add,0,wxALL,4);
     add->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){
-        wxFileDialog picker(&dialog,"Add module archives",{},{},"Module archives|*.rim;*.RIM;*.mod;*.MOD;*.erf;*.ERF",wxFD_OPEN|wxFD_FILE_MUST_EXIST|wxFD_MULTIPLE);
+        wxFileDialog picker(&dialog,"Add module archives",{},{},"Module archives|*.rim;*.RIM;*.mod;*.MOD;*.mzd;*.MZD;*.erf;*.ERF",wxFD_OPEN|wxFD_FILE_MUST_EXIST|wxFD_MULTIPLE);
         if(picker.ShowModal()!=wxID_OK)return;
         wxArrayString paths;picker.GetPaths(paths);
         for(const auto& value:paths) {const auto path=neosettings::pathFromWx(value);if(std::find(archives.begin(),archives.end(),path)==archives.end())archives.push_back(path);}

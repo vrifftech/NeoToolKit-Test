@@ -1,3 +1,4 @@
+#include <gff/GffText.hpp>
 #include "ModuleControls.hpp"
 #include "NeoWxUi.hpp"
 #include <wx/button.h>
@@ -126,7 +127,7 @@ void ModuleControls::load(const neogff::GffStruct* root,const std::vector<std::s
     root_=root;
     for(auto& row:rows_) {
         const auto* field=root?root->GetFieldByLabel(row.field):nullptr;
-        row.text->Enable(root!=nullptr);row.text->ChangeValue(field?wxui::toWx(field->GetString()):wxString{});row.text->DiscardEdits();
+        row.text->Enable(root!=nullptr);row.text->ChangeValue(field?wxui::toWx(neogff::decodeGffText(field->GetString())):wxString{});row.text->DiscardEdits();
     }
     const std::map<int,std::string> languages={{0,"English"},{1,"French"},{2,"German"},{3,"Italian"},{4,"Spanish"},{5,"Polish"},
         {128,"Korean"},{129,"Chinese (traditional)"},{130,"Chinese (simplified)"},{131,"Japanese"}};
@@ -161,7 +162,7 @@ void ModuleControls::apply(const Row& row) {
 }
 void ModuleControls::showLocalized(std::size_t index) {
     auto& row=localized_[index];const auto* field=root_?static_cast<const neogff::GffLocalizedStringField*>(root_->GetFieldByLabel(row.field)):nullptr;
-    row.text->ChangeValue(field?wxui::toWx(field->GetStringById(row.ids.at(row.language->GetSelection()))):wxString{});row.text->DiscardEdits();
+    row.text->ChangeValue(field?wxui::toWx(neogff::decodeGffText(field->GetStringById(row.ids.at(row.language->GetSelection())),row.ids.at(row.language->GetSelection())/2)):wxString{});row.text->DiscardEdits();
 }
 void ModuleControls::updateAreaActions() {
     const auto selected=areas_->GetSelection();const bool selection=root_&&selected!=wxNOT_FOUND;

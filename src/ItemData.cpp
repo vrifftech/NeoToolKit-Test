@@ -1,4 +1,5 @@
 #include "ItemData.hpp"
+#include <gff/GffText.hpp>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -12,10 +13,10 @@ template<class T> unsigned value(const GffStruct& root,const std::string& name,u
 std::string numbered(const std::string& prefix,unsigned n,int digits) {std::ostringstream s;s<<prefix<<std::setfill('0')<<std::setw(digits)<<n;return neomdl::resourceKey(s.str().substr(0,16));}
 }
 int ItemReader::integer(const std::string& file,int row,const std::string& column,int initial) {neomdl::engine2da::getInt(tables_.table(file),row,column,initial);return initial;}
-std::string ItemReader::caption(const std::string& file,int row,const std::string& column,int minimum) {int ref=-1;const bool present=neomdl::engine2da::getInt(tables_.table(file),row,column,ref);return present&&ref>=minimum?tlk_.resolve(unsigned(ref)).value():std::string{};}
+std::string ItemReader::caption(const std::string& file,int row,const std::string& column,int minimum) {int ref=-1;const bool present=neomdl::engine2da::getInt(tables_.table(file),row,column,ref);return present&&ref>=minimum?tlk_.resolveKotor(unsigned(ref)).value():std::string{};}
 std::string ItemReader::localized(const GffStruct& root,const std::string& name) {
     const auto* f=field<GffLocalizedStringField>(root,name);std::string text;bool embedded=false;
-    if(f) {for(const auto& s:f->substrings)if(unsigned(s.stringid)==tlk_.languageId()*2) {text=s.GetString();embedded=true;}if(!embedded&&f->strref!=0xffffffffu)text=tlk_.resolve(f->strref).value();}
+    if(f) {for(const auto& s:f->substrings)if(unsigned(s.stringid)==tlk_.languageId()*2) {text=neotlk::decodeTextBytes(s.GetString(),tlk_.textEncoding());embedded=true;}if(!embedded&&f->strref!=0xffffffffu)text=tlk_.resolveKotor(f->strref).value();}
     return text;
 }
 ItemData ItemReader::read(const GffStruct& root) {
@@ -54,7 +55,7 @@ ItemData ItemReader::read(const GffStruct& root) {
     }
     std::stable_partition(item.properties.begin(),item.properties.end(),[](const auto& p){return p.active;});
     auto body=localized(root,field<GffLocalizedStringField>(root,"DescIdentified")?"DescIdentified":"Description");
-    if(body.empty())body=tlk_.resolve(32172).value();
+    if(body.empty())body=tlk_.resolveKotor(32172).value();
     item.description=details(item)+body;return item;
 }
 bool stackCompatible(const ItemData& a,const ItemData& b) {
@@ -82,7 +83,7 @@ std::pair<int,int> ItemReader::damageRange(unsigned value) {
     return {dice,dice*integer("iprp_damagecost",int(value),"Die")};
 }
 std::string ItemReader::details(const ItemData& item) {
-    std::string out;const auto label=[&](unsigned ref){return tlk_.resolve(ref).value();};
+    std::string out;const auto label=[&](unsigned ref){return tlk_.resolveKotor(ref).value();};
     const auto base=[&](const std::string& key,int initial=0){return integer("baseitems",item.baseItem,key,initial);};
     const auto itemType=std::uint8_t(base("ItemType"));
     if(itemType==46||itemType==6||(k2_&&itemType==49))return {};

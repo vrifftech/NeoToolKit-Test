@@ -1,3 +1,4 @@
+#include <gff/GffText.hpp>
 #include "PlaceableEditor.hpp"
 #include "wx/ModelCanvas.hpp"
 #include <core/ObjectVisualState.hpp>
@@ -210,8 +211,8 @@ void ObjectEditor::refresh(const neogff::GffStruct& root) {
             static_cast<wxColourPickerCtrl*>(row.control)->SetColour(wxColour(color&255u,(color>>8u)&255u,(color>>16u)&255u));
         } else {
             std::string text;
-            if(row.kind==Kind::LocalizedText) {const auto* loc=field<neogff::GffLocalizedStringField>(root,row.field);if(loc)text=loc->GetStringById(englishId(loc));}
-            else if(value)text=value->GetString();
+            if(row.kind==Kind::LocalizedText) {const auto* loc=field<neogff::GffLocalizedStringField>(root,row.field);if(loc)text=neogff::decodeGffText(loc->GetStringById(englishId(loc)),englishId(loc)/2);}
+            else if(value)text=neogff::decodeGffText(value->GetString());
             auto* input=static_cast<wxTextCtrl*>(row.control);input->ChangeValue(wxui::toWx(text));input->DiscardEdits();
         }
         row.edited=false;

@@ -228,12 +228,12 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){setModFolder({});},ID_ClearModFolder);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         auto path=wxui::chooseOpenFile(this,"Open resource",
-            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gui;*.GUI;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
+            "Resources (archives, KEY, models, tables, textures, soundsets, GFF)|*.erf;*.ERF;*.mod;*.MOD;*.mzd;*.MZD;*.rim;*.RIM;*.sav;*.SAV;*.hak;*.HAK;*.nwm;*.NWM;*.crf;*.CRF;*.rimp;*.RIMP;*.key;*.KEY;*.2da;*.2DA;*.gda;*.GDA;*.mdl;*.MDL;*.mdx;*.MDX;*.mdl.ascii;*.MDL.ASCII;*.tpc;*.TPC;*.txb;*.TXB;*.tga;*.TGA;*.dds;*.DDS;*.png;*.PNG;*.jpg;*.JPG;*.jpeg;*.JPEG;*.jpe;*.JPE;*.bmp;*.BMP;*.txi;*.TXI;*.ssf;*.SSF;*.tlk;*.TLK;*.dlg;*.DLG;*.jrl;*.JRL;*.gui;*.GUI;*.gff;*.GFF;*.utc;*.UTC;*.uti;*.UTI;*.utm;*.UTM;*.utp;*.UTP;*.utd;*.UTD;*.ute;*.UTE;*.uts;*.UTS;*.utt;*.UTT;*.utw;*.UTW;*.are;*.ARE;*.git;*.GIT;*.ifo;*.IFO|All files (*.*)|*.*");
         if(path)openPath(*path);
     },ID_Open);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         wxFileDialog dialog(this,"Open live module",{},{},
-            "Module archives and resources|*.rim;*.RIM;*.mod;*.MOD;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            "Module archives and resources|*.rim;*.RIM;*.mod;*.MOD;*.mzd;*.MZD;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
         if(dialog.ShowModal()==wxID_OK)openPath(neosettings::pathFromWx(dialog.GetPath()),"module");
     },ID_OpenLiveModule);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){wxMessageBox(

@@ -98,7 +98,7 @@ void ShopPreview::text(wxGraphicsContext& dc,const GffStruct& style,const std::s
 void ShopPreview::paint(wxPaintEvent&) {
     wxAutoBufferedPaintDC paint(this);paint.SetBackground(wxBrush(wxColour(14,16,20)));paint.Clear();hits_.clear();if(!loaded())return;
     try {
-        std::unique_ptr<wxGraphicsContext> dc(wxGraphicsContext::Create(paint));const auto root=renderer_.layoutExtent(extent(*layout_.root()));const auto size=GetClientSize();scale_=std::min(size.x/root.m_width,size.y/root.m_height);offsetX_=(size.x-root.m_width*scale_)/2;offsetY_=(size.y-root.m_height*scale_)/2;dc->Translate(offsetX_,offsetY_);dc->Scale(scale_,scale_);dc->BeginLayer(std::clamp(number(*layout_.root(),"ALPHA",1),0.0,1.0));
+        std::unique_ptr<wxGraphicsContext> dc(wxGraphicsContext::Create(paint));const auto root=renderer_.layoutExtent(extent(*layout_.root()));renderer_.setViewport(root);const auto size=GetClientSize();scale_=std::min(size.x/root.m_width,size.y/root.m_height);offsetX_=(size.x-root.m_width*scale_)/2;offsetY_=(size.y-root.m_height*scale_)/2;dc->Translate(offsetX_,offsetY_);dc->Scale(scale_,scale_);dc->BeginLayer(std::clamp(number(*layout_.root(),"ALPHA",1),0.0,1.0));
         if(field<GffStruct>(*layout_.root(),"BORDER"))border(*dc,*layout_.root(),"BORDER",{0,0,root.m_width,root.m_height});
         else stamp(*dc,string(*layout_.root(),"BACKGROUND"),{0,0,root.m_width,root.m_height},{1,1,1});
         const auto& controls=*field<GffList>(*layout_.root(),"CONTROLS");const Item* selected=nullptr;for(const auto& item:items_)if(!item.plot&&std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end()) {selected=&item;break;}
@@ -139,12 +139,12 @@ void ShopPreview::paint(wxPaintEvent&) {
                 if(bar)renderer_.scrollbar(*dc,*bar,{byte(*control,"LEFTSCROLLBAR",1)?rect.m_x:contentRect.GetRight(),rect.m_y,renderer_.layoutExtent(extent(*bar)).m_width,rect.m_height},int(descriptionMaximum_)+1,descriptionMaximum_&&descriptionScroll_==descriptionMaximum_?int(descriptionMaximum_)+1:int(descriptionScroll_),descriptionMaximum_?int(descriptionRect_.m_height):1);
             }
             else if(const auto* style=field<GffStruct>(*control,"TEXT")) {
-                std::string value=string(*style,"TEXT");if(const auto* ref=field<GffUInt32Field>(*style,"STRREF");ref&&ref->value!=0xffffffffu)value=tlk_.resolve(ref->value).value();
-                if(tag=="LBL_BUYSELL")value=tlk_.resolve(32132).value();
-                if(tag=="BTN_Accept")value=tlk_.resolve(game_==neomdl::model::GameVersion::Kotor1?32132:125552).value();
-                if(tag=="BTN_Examine")value=tlk_.resolve(41938).value();
-                if(tag=="LBL_COST")value=tlk_.resolve(41943).value();
-                if(tag=="LBL_STOCK_VALUE")value=selected?(selected->infinite?tlk_.resolve(41951).value():std::to_string(selected->stack)):"";
+                std::string value=neotlk::decodeTextBytes(string(*style,"TEXT"),tlk_.textEncoding());if(const auto* ref=field<GffUInt32Field>(*style,"STRREF");ref&&ref->value!=0xffffffffu)value=tlk_.resolveKotor(ref->value).value();
+                if(tag=="LBL_BUYSELL")value=tlk_.resolveKotor(32132).value();
+                if(tag=="BTN_Accept")value=tlk_.resolveKotor(game_==neomdl::model::GameVersion::Kotor1?32132:125552).value();
+                if(tag=="BTN_Examine")value=tlk_.resolveKotor(41938).value();
+                if(tag=="LBL_COST")value=tlk_.resolveKotor(41943).value();
+                if(tag=="LBL_STOCK_VALUE")value=selected?(selected->infinite?tlk_.resolveKotor(41951).value():std::to_string(selected->stack)):"";
                 if(tag=="LBL_COST_VALUE")value=selected?std::to_string(std::int32_t(selected->cost*(std::uint32_t(markUp_)+std::uint32_t(bonusMarkup_))/100u)):"";
                 if(tag=="LBL_ONHAND_VALUE")value=selected?std::to_string(onHand_):"";
                 if(tag=="LBL_CREDITS_VALUE")value=std::to_string(credits_);

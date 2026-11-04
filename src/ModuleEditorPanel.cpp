@@ -507,7 +507,7 @@ public:
             std::map<Key,Resource> resources;
             auto catalog=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
             const auto extension=neomdl::resourceKey(neoshared::pathToUtf8(path.extension()));
-            const bool archive=extension==".rim"||extension==".mod";
+            const bool archive=extension==".rim"||extension==".mod"||extension==".mzd";
             if(archive) {
                 if(!catalog->openFiles(path.parent_path(),{path}))throw std::runtime_error(catalog->lastError());
                 for(const auto& entry:catalog->resources())if(editableResource(entry.type)) {
@@ -881,7 +881,7 @@ private:
             switch(event.GetId()) {
             case ID_OpenModule: {
                 wxFileDialog dialog(this,"Open live module",{},{},
-                    "Module archives and resources|*.rim;*.RIM;*.mod;*.MOD;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+                    "Module archives and resources|*.rim;*.RIM;*.mod;*.MOD;*.mzd;*.MZD;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
                 if(dialog.ShowModal()==wxID_OK)openFile(neosettings::pathFromWx(dialog.GetPath()));
                 return;
             }
@@ -2407,7 +2407,7 @@ void ModuleEditor::linkTransition() {
     });
     browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){
         try {
-            wxFileDialog choose(&dialog,"Open destination module",{},{},"Module archives and resources|*.mod;*.MOD;*.rim;*.RIM;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            wxFileDialog choose(&dialog,"Open destination module",{},{},"Module archives and resources|*.mod;*.MOD;*.mzd;*.MZD;*.rim;*.RIM;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
             if(choose.ShowModal()!=wxID_OK)return;
             if(!destination->openFile(neosettings::pathFromWx(choose.GetPath())))return;
             returnPath.clear();modules->SetSelection(wxNOT_FOUND);destinationName->ChangeValue(wxui::toWx(destination->moduleName_));
@@ -2612,7 +2612,7 @@ bool ModuleEditor::packageModule(const std::string& outputName) {
     if(!archivePath_.empty()) {
         addArchive(archivePath_);
         std::map<std::string,std::filesystem::path> siblings;
-        const std::vector<std::string> candidates{moduleName_+".mod",moduleName_+"_s.rim",moduleName_+".rim",moduleName_+"_dlg.erf"};
+        const std::vector<std::string> candidates{moduleName_+".mzd",moduleName_+".mod",moduleName_+"_s.rim",moduleName_+".rim",moduleName_+"_dlg.erf"};
         for(const auto& file:std::filesystem::directory_iterator(archivePath_.parent_path())) {
             auto name=neoshared::pathToUtf8(file.path().filename());
             for(auto& c:name)if(c>='A'&&c<='Z')c=char(c+('a'-'A'));
