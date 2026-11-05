@@ -1,5 +1,7 @@
 #include "WorkspaceFrame.hpp"
+#include "neotoolkit_icon.xpm"
 #include <wx/app.h>
+#include <wx/icon.h>
 
 class NeoToolKitApp final : public wxApp {
 public:
@@ -8,6 +10,7 @@ public:
         SetVendorName("Neo Tools");
         wxInitAllImageHandlers();
         auto* frame = new neotoolkit::WorkspaceFrame;
+        frame->SetIcon(wxIcon(neotoolkit_icon_xpm));
         frame->Show();
         SetTopWindow(frame);
         for (int i = 1; i < argc; ++i) {

@@ -7,7 +7,7 @@ function(neotoolkit_configure_packaging)
     set(_component toolkit-runtime)
     set(NEOTOOLKIT_VERSION "${PROJECT_VERSION}")
     if(WIN32)
-        set(NEOTOOLKIT_ICON "${NEOTOOLKIT_NEOBIF_SOURCE_DIR}/resources/neobif.ico")
+        set(NEOTOOLKIT_ICON "${_host_source}/resources/neotoolkit.ico")
         configure_file("${_host_source}/resources/neotoolkit.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/neotoolkit.rc" @ONLY)
         target_sources(NeoToolKit-Test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/neotoolkit.rc")
         set(_platform windows-x64)
@@ -15,7 +15,7 @@ function(neotoolkit_configure_packaging)
         include("${NEOSHARED_ROOT}/cmake/NeoMacOSBundle.cmake")
         neo_configure_macos_bundle(NeoToolKit-Test
             NAME "NeoToolKit Test" IDENTIFIER "com.vrifftech.neotoolkit-test"
-            VERSION "${PROJECT_VERSION}" ICON "${NEOTOOLKIT_NEOBIF_SOURCE_DIR}/resources/neobif.icns")
+            VERSION "${PROJECT_VERSION}" ICON "${_host_source}/resources/neotoolkit.icns")
         set(_platform "macos-${CMAKE_OSX_ARCHITECTURES}")
     else()
         set(_platform linux-x64)
@@ -33,12 +33,12 @@ function(neotoolkit_configure_packaging)
             "${CMAKE_CURRENT_BINARY_DIR}/neotoolkit-test.desktop" @ONLY)
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/neotoolkit-test.desktop"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications" COMPONENT ${_component})
-        foreach(size 16 24 32 48 64 128 256)
-            install(FILES "${NEOTOOLKIT_NEOBIF_SOURCE_DIR}/resources/icons/${size}x${size}/neobif.png"
+        foreach(size 16 24 32 48 64 128 256 512)
+            install(FILES "${_host_source}/resources/icons/${size}x${size}/neotoolkit.png"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps"
                 RENAME neotoolkit-test.png COMPONENT ${_component})
         endforeach()
-        install(FILES "${NEOTOOLKIT_NEOBIF_SOURCE_DIR}/resources/neobif.svg"
+        install(FILES "${_host_source}/resources/neotoolkit.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
             RENAME neotoolkit-test.svg COMPONENT ${_component})
     endif()
