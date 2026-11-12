@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: toolkit-native-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -160,7 +160,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./NeoToolKit-Test/scripts/build.ps1 -CiPhase package
+      - name: Upload Windows GUI
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NeoToolKit-Test-${{ needs.sources.outputs.version }}-${{ matrix.artifact }}-${{ github.run_number }}
+          path: NeoToolKit-Test/build/ci/stage-workspace/bin/NeoToolKit-Test.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
       - name: Upload application packages and checksums
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: NeoToolKit-Test-${{ needs.sources.outputs.version }}-${{ matrix.artifact }}-${{ github.run_number }}
@@ -189,3 +199,15 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
+
+  release:
+    name: Publish release
+    needs: [sources, native]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: write
+    uses: vrifftech/neoshared/.github/workflows/publish-release.yml@main
+    with:
+      version-file: CMakeLists.txt
+      artifact-pattern: NeoToolKit-Test-${{ needs.sources.outputs.version }}-*
