@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 cmake_policy(SET CMP0091 NEW)
-project(NeoToolKitTest VERSION 1.0.0 LANGUAGES CXX)
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/src/core/Version.hpp" _version_line
+    REGEX "^#define NEOTOOLKIT_VERSION_STRING ")
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" NEOTOOLKIT_VERSION "${_version_line}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/src/core/Version.hpp")
+project(NeoToolKitTest VERSION ${NEOTOOLKIT_VERSION} LANGUAGES CXX)
 if(WIN32)
     enable_language(RC)
 endif()
