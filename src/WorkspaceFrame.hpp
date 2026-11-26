@@ -13,6 +13,7 @@
 #include "EditorRouting.hpp"
 #include "ModuleEditorPanel.hpp"
 #include "ItemEditorPanel.hpp"
+#include "StoreEditorPanel.hpp"
 #include "PlaceableEditor.hpp"
 #include "NeoSettings.hpp"
 #include <neoshared/bif/ModFolder.hpp>
@@ -34,7 +35,9 @@ private:
     void setModFolder(const std::filesystem::path& path);
     bool gamePath(const std::filesystem::path& path) const;
     neoshared::ResourceResolver captureResources(const std::string& module={});
-    bool openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession);
+    bool openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession,std::shared_ptr<ArchiveContext> archive={});
+    std::shared_ptr<neomdl::GameResourceSession> captureGameResources(const std::string& module,const std::filesystem::path& source={});
+    std::shared_ptr<ArchiveContext> captureArchiveContext(const neoshared::ResourceDocument& resource);
     struct Menu {wxString title;std::unique_ptr<wxMenu> menu;};
     void buildMenus();
     void captureEditorMenus(std::size_t index);
@@ -71,6 +74,7 @@ private:
     ItemEditorPanel* items_{};
     ObjectEditorPanel* placeables_{};
     ObjectEditorPanel* creatures_{};
+    StoreEditorPanel* stores_{};
     wxSplitterWindow* splitter_{};
     wxAuiNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;
@@ -78,6 +82,8 @@ private:
     std::size_t activeEditor_=kEditorCount;
     std::size_t attachedMenuCount_=0;
     bool menusReady_=false;
+    wxString browserTitle_="Game Explorer";
+    std::array<wxString,kEditorCount> editorTitles_;
     std::vector<std::filesystem::path> protectedInputs_;
     neosettings::AppSettings settings_{"NeoToolKit-Test"};
     bool dark_{};

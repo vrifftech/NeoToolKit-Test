@@ -19,7 +19,7 @@ class wxNotebook;
 
 namespace neotoolkit {
 
-class BlueprintEditor final : public wxDialog {
+class BlueprintPanel final : public wxPanel {
 public:
     enum class StockAction {Duplicate,Remove,Infinite};
     struct Actions {
@@ -28,14 +28,17 @@ public:
         std::function<void(StockAction,std::size_t,bool)> stock;
         std::function<void(const std::string&,std::uint16_t)> itemFields;
         std::function<void()> fields,save,package,undo,redo;
+        std::string saveLabel="Save resources...";
+        std::string sourceNote=" — module override; affects instances using this template. Save resources or Package MOD includes edits.";
     };
-    BlueprintEditor(wxWindow* parent,Actions actions);
+    BlueprintPanel(wxWindow* parent,Actions actions);
     void open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
         neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
     void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged=false);
     void clear();
-    void applyPending() {if(object_)object_->applyPending();}
+    void applyPending();
+    void setSaveLabel(const std::string& label);
     void setHistory(bool undo,bool redo);
     void selectInventory(std::size_t index);
 private:
@@ -64,7 +67,24 @@ private:
     wxNotebook* previews_{};ItemPreview* itemPreview_{};
     ObjectEditor* object_{};
     wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* loadPreview_{};
-    wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
+    wxButton* save_{};wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
+};
+
+class BlueprintEditor final : public wxDialog {
+public:
+    using Actions=BlueprintPanel::Actions;
+    using StockAction=BlueprintPanel::StockAction;
+    BlueprintEditor(wxWindow* parent,Actions actions);
+    void open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
+        neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
+        std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
+    void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged=false) {panel_->refresh(root,std::move(resolver),itemsChanged);}
+    void clear() {panel_->clear();Hide();}
+    void applyPending() {panel_->applyPending();}
+    void setHistory(bool undo,bool redo) {panel_->setHistory(undo,redo);}
+    void selectInventory(std::size_t index) {panel_->selectInventory(index);}
+private:
+    BlueprintPanel* panel_{};
 };
 
 }

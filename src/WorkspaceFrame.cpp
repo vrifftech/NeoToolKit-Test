@@ -6,12 +6,14 @@
 #include <neoshared/PathUtf8.hpp>
 #include <wx/dnd.h>
 #include <wx/menu.h>
+#include <wx/stattext.h>
+#include <wx/weakref.h>
 #include <algorithm>
 #include <cctype>
 #include <utility>
 namespace neotoolkit {
 namespace {
-enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ToggleExplorer, ID_Open, ID_OpenLiveModule, ID_SetModFolder, ID_RefreshModFolder, ID_ClearModFolder, ID_ModFolderPath };
+enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ToggleExplorer, ID_Open, ID_OpenLiveModule, ID_SetModFolder, ID_RefreshModFolder, ID_ClearModFolder, ID_ModFolderPath, ID_CloseEditor };
 class DropTarget final: public wxFileDropTarget {
 public:
     explicit DropTarget(WorkspaceFrame& frame):frame_(frame){}
@@ -30,7 +32,7 @@ void stripAccelerators(wxMenu& menu) {
 }
 constexpr const char* kEditorPageTitles[kEditorCount]={
     "2DA tables","Soundsets","Talk tables","GFF resources",
-    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor","GUI layouts","Items","Placeables","Creatures"
+    "Dialogues","Journals","Models","Textures","Archives","Live Module Editor","GUI layouts","Items","Placeables","Creatures","Merchants"
 };
 std::string resourceExtension(const neoshared::ResourceDocument& resource) {
     return editorExtensionForPath(neoshared::pathFromUtf8(resource.fileName));
@@ -48,17 +50,17 @@ void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
     }
 }
 }
-std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_,items_,placeables_,creatures_};}
+std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_,items_,placeables_,creatures_,stores_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
     splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
     neomodules::Context browserContext;
     browserContext.embedded=true;browserContext.compact=false;
     browserContext.closeRequested=[this]{Close();};
-    browserContext.titleChanged=[this](const wxString& title){resourceSession_.reset();resourceResolvers_.clear();SetTitle("NeoToolKit Test - "+title);};
+    browserContext.titleChanged=[this](const wxString& title){resourceSession_.reset();resourceResolvers_.clear();browserTitle_=title;if(activeEditor_==kEditorCount)SetTitle("NeoToolKit Test - "+title);};
     browser_=neobif::ui::createBrowserPanel(splitter_,std::move(browserContext));
     editors_=new wxAuiNotebook(splitter_,wxID_ANY,wxDefaultPosition,wxDefaultSize,
-        wxAUI_NB_TOP|wxAUI_NB_TAB_MOVE|wxAUI_NB_CLOSE_ON_ACTIVE_TAB|wxAUI_NB_SCROLL_BUTTONS);
+        wxAUI_NB_TOP|wxAUI_NB_TAB_MOVE|wxAUI_NB_SCROLL_BUTTONS);
     editors_->SetName("NeoToolKit editors");
     editors_->Hide();
     browser_->setArchiveOpenHandler([this](const auto& path,auto inputs){
@@ -113,7 +115,10 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){
         if(!browser_->canClose()) {if(event.CanVeto())event.Veto();return;}
         const auto list=panels();
+        for(const auto i:{std::size_t(EditorKind::Modules),std::size_t(EditorKind::Stores)})
+            if(list[i]&&!list[i]->canClose()) {selectEditor(i);if(event.CanVeto())event.Veto();return;}
         for(std::size_t i=0;i<list.size();++i) {
+            if(i==std::size_t(EditorKind::Modules)||i==std::size_t(EditorKind::Stores))continue;
             if(list[i] && !list[i]->canClose()){
                 selectEditor(i);
                 if(event.CanVeto())event.Veto();
@@ -145,12 +150,8 @@ void WorkspaceFrame::setModFolder(const std::filesystem::path& path) {
 }
 neoshared::ResourceResolver WorkspaceFrame::captureResources(const std::string& module) {
     if(const auto found=resourceResolvers_.find(module);found!=resourceResolvers_.end())return found->second;
-    if(!browser_->indexComplete()) {
-        // Browse/open the published KEY/BIF snapshot while the rest is loading.
-        // NeoBIF notifies titleChanged when the active index or installation changes.
-        auto resolver=neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);
-        resourceResolvers_.emplace(module,resolver);return resolver;
-    }
+    // Game dependencies use the same mounts even while the browser's catalogue
+    // is loading; a KEY-only resolver would ignore installed overrides.
     if(!resourceSession_) {
         const auto key=browser_->activeKeyPath();
         auto install=key.empty()?std::optional<neoshared::game::GameInstall>{}:neoshared::game::inspectGameInstallation(key.parent_path());
@@ -177,6 +178,60 @@ neoshared::ResourceResolver WorkspaceFrame::captureResources(const std::string& 
         neomdl::ResourceLoadScope work(job);return native(name,type);
     };
     resourceResolvers_.emplace(module,resolver);return resolver;
+}
+std::shared_ptr<neomdl::GameResourceSession> WorkspaceFrame::captureGameResources(const std::string& module,const std::filesystem::path& source) {
+    std::optional<neoshared::game::GameInstall> installation;
+    for(auto directory=source.parent_path();!directory.empty();) {
+        installation=neoshared::game::inspectGameInstallation(directory);
+        if(installation)break;
+        const auto parent=directory.parent_path();if(parent==directory)break;directory=parent;
+    }
+    std::shared_ptr<neomdl::GameResourceSession> base;
+    if(installation&&(installation->id=="kotor"||installation->id=="kotor2")) {
+        if(resourceSession_&&neoshared::sameResourcePath(resourceSession_->installation()->installPath,installation->installPath))base=resourceSession_;
+        else {
+            for(const auto& saved:neogames::resolver().settings().readSaved(*neogames::findGame(installation->id)))
+                if(neoshared::sameResourcePath(saved.installPath,installation->installPath)) {installation=saved;break;}
+            base=std::make_shared<neomdl::GameResourceSession>();std::string error;
+            if(!base->open(*installation,error,{},modFolder_))throw std::runtime_error(error);
+        }
+    } else {captureResources();base=resourceSession_;}
+    if(!base||module.empty())return base;
+    const auto scopes=base->modules();const auto found=std::find_if(scopes.begin(),scopes.end(),[&](const auto& scope){return scope.name==module;});
+    if(found==scopes.end())return base; // A working archive may define a new module.
+    auto scoped=std::make_shared<neomdl::GameResourceSession>();std::string error;
+    if(!scoped->openModule(*base,*found,error))throw std::runtime_error(error);
+    return scoped;
+}
+std::shared_ptr<ArchiveContext> WorkspaceFrame::captureArchiveContext(const neoshared::ResourceDocument& resource) {
+    auto context=std::make_shared<ArchiveContext>();
+    const auto* archive=archives_->activeDocumentModel();
+    context->identity=archive->identity();context->label=archive->displayName();context->sourcePath=resource.sourcePath;
+    auto module=resource.module.empty()?neoshared::bif::ModFolder::moduleName(resource.sourcePath):resource.module;
+    if(module.empty()&&(resource.type==2012||resource.type==2023))module=neoshared::pathToUtf8(neoshared::pathFromUtf8(resource.fileName).stem());
+    context->game=captureGameResources(module,resource.sourcePath);
+    using Key=std::pair<std::string,std::uint16_t>;
+    auto members=std::make_shared<std::map<Key,neoshared::ResourceDocument>>();
+    for(auto& member:archives_->snapshotMembers()) {
+        member.module=module;
+        const auto name=neomdl::resourceKey(neoshared::pathToUtf8(neoshared::pathFromUtf8(member.fileName).stem()));
+        members->emplace(Key{name,member.type},std::move(member));
+    }
+    context->members=std::move(members);
+    context->resources=[members=context->members](const std::string& name,std::uint16_t type)->std::optional<neoshared::ResourceDocument> {
+        const auto found=members->find({neomdl::resourceKey(name),type});
+        return found==members->end()?std::nullopt:std::optional<neoshared::ResourceDocument>(found->second);
+    };
+    wxWeakRef<neoerf::ui::ERFEditorPanel> parent(archives_);const auto identity=context->identity;
+    context->update=[parent,identity](const auto& resources) {
+        if(!parent)throw std::runtime_error("The parent archive editor is closed. Save your edits to a separate file or folder, then reopen the resource from its archive.");
+        parent->updateMembers(identity,resources);
+    };
+    context->show=[this,parent,identity] {
+        if(!parent||!parent->activateResource(identity))throw std::runtime_error("The parent archive is closed. Reopen it to return to its resource list.");
+        selectEditor(std::size_t(EditorKind::Archives));
+    };
+    return context;
 }
 bool WorkspaceFrame::gamePath(const std::filesystem::path& path) const {
     const auto inside=[&](const std::filesystem::path& root) {
@@ -214,6 +269,7 @@ void WorkspaceFrame::buildMenus() {
     bar->Append(file,"&File");bar->Append(explorer,"Game &Explorer");
     auto* workspace=new wxMenu;
     workspace->AppendCheckItem(ID_ToggleExplorer,"Show Game Explorer")->Check(true);
+    workspace->Append(ID_CloseEditor,"Close editor and all its documents...")->Enable(false);
     workspace->AppendSeparator();workspace->AppendCheckItem(ID_Dark,"Dark mode");
     workspace->Append(ID_FontLarger,"Increase font size\tCtrl++");
     workspace->Append(ID_FontSmaller,"Decrease font size\tCtrl+-");
@@ -222,6 +278,7 @@ void WorkspaceFrame::buildMenus() {
     bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;
     bar->Enable(ID_ToggleExplorer,false);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
+    Bind(wxEVT_MENU,[this](wxCommandEvent&){closeEditorPage(editors_->GetSelection());},ID_CloseEditor);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
         wxDirDialog dialog(this,"Mod resources take priority over installed game resources",modFolder_?neosettings::pathToWx(modFolder_->root()):wxString{},wxDD_DEFAULT_STYLE|wxDD_DIR_MUST_EXIST);
         if(dialog.ShowModal()==wxID_OK)try {setModFolder(neosettings::pathFromWx(dialog.GetPath()));}catch(const std::exception& e){wxui::showError(this,e);}
@@ -260,7 +317,7 @@ void WorkspaceFrame::captureEditorMenus(std::size_t index) {
         // intentionally omitted while an editor workspace is active.
         if(label.CmpNoCase("Help")==0) {hiddenMenus_[index].emplace_back(menu);continue;}
         if(label=="File") {
-            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module","GUI layout","Item","Placeable","Creature"};
+            static const char* titles[]={"Table","Soundset","Talk table","Structured resource","Conversation","Journal","Model","Texture","Archive","Module","GUI layout","Item","Placeable","Creature","Merchant"};
             label=titles[index];
         }
         // All editors' own open remains available; host's Ctrl+O handles all types.
@@ -291,11 +348,16 @@ void WorkspaceFrame::switchMenus(std::size_t index) {
     activeEditor_=index;
     for(std::size_t i=0;i<menus_[index].size();++i)bar->Insert(2+i,menus_[index][i].menu.release(),menus_[index][i].title);
     attachedMenuCount_=menus_[index].size();bar->Refresh();
+    bar->Enable(ID_CloseEditor,true);
+    bar->SetLabel(ID_CloseEditor,"Close "+wxString::FromUTF8(kEditorPageTitles[index])+" and all its documents...");
+    SetTitle("NeoToolKit Test - "+(editorTitles_[index].empty()?wxString::FromUTF8(kEditorPageTitles[index]):editorTitles_[index]));
 }
 neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     if(auto* panel=panelFor(kind))return panel;
     neomodules::Context context;context.embedded=true;context.closeRequested=[this]{Close();};
     context.compact=kind==EditorKind::Models||kind==EditorKind::Modules;
+    context.titleChanged=[this,kind](const wxString& title){const auto index=std::size_t(kind);editorTitles_[index]=title;if(activeEditor_==index)SetTitle("NeoToolKit Test - "+title);};
+    GameResources games=[this](const std::string& module,const std::filesystem::path& source){return captureGameResources(module,source);};
     context.validateOutputs=[this](const auto& paths,const auto* owner,const auto& inputs){checkOutputs(paths,owner,inputs);};
     context.resolveResource=[this](const std::string& resref,std::uint16_t type){
         return captureResources()(resref,type,{});
@@ -312,11 +374,12 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Dialogues:dialogues_=neodlg::ui::createEditorPanel(editors_,context);panel=dialogues_;break;
     case EditorKind::Journals:journals_=neojrl::ui::createEditorPanel(editors_,context);panel=journals_;break;
     case EditorKind::Models:models_=neomdl::ui::createModelEditorPanel(editors_,context);panel=models_;break;
-    case EditorKind::Modules:modules_=createModuleEditorPanel(editors_,context);panel=modules_;break;
+    case EditorKind::Modules:modules_=createModuleEditorPanel(editors_,context,games);panel=modules_;break;
     case EditorKind::Gui:guis_=neogui::ui::createEditorPanel(editors_,context);panel=guis_;break;
     case EditorKind::Items:items_=createItemEditorPanel(editors_,context);panel=items_;break;
     case EditorKind::Placeables:placeables_=createObjectEditorPanel(editors_,context,2044);panel=placeables_;break;
     case EditorKind::Creatures:creatures_=createObjectEditorPanel(editors_,context,2027);panel=creatures_;break;
+    case EditorKind::Stores:stores_=createStoreEditorPanel(editors_,context,games,[this](auto resource){openSnapshot(std::move(resource),{},true);});panel=stores_;break;
     case EditorKind::Textures:textures_=neotpc::ui::createEditorPanel(editors_,context);panel=textures_;break;
     case EditorKind::Archives:
         archives_=neoerf::ui::createEditorPanel(editors_,context);panel=archives_;
@@ -325,9 +388,10 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
             for(const auto& choice:editorsForType(type))result.push_back({choice.id,choice.label});
             return result;
         },[this](neoshared::ResourceDocument resource,const std::string& editor){
-            // A member is an independent snapshot. Its owning writable archive may
-            // still be committed deliberately by NeoERF; member saves remain guarded.
-            openSnapshot(std::move(resource),editor,false);
+            std::shared_ptr<ArchiveContext> archive;
+            if(editor=="module"||editor=="store")archive=captureArchiveContext(resource);
+            if(resource.module.empty())resource.module=neoshared::bif::ModFolder::moduleName(resource.sourcePath);
+            openSnapshot(std::move(resource),editor,false,std::move(archive));
         }});
         break;
     }
@@ -362,6 +426,7 @@ void WorkspaceFrame::destroyEditor(EditorKind kind) {
     case EditorKind::Items:items_=nullptr;break;
     case EditorKind::Placeables:placeables_=nullptr;break;
     case EditorKind::Creatures:creatures_=nullptr;break;
+    case EditorKind::Stores:stores_=nullptr;break;
     }
     panel->Hide();panel->Destroy();
 }
@@ -389,6 +454,7 @@ void WorkspaceFrame::showEditor(EditorKind kind) {
         panel->Show();
         if(!editors_->AddPage(panel,wxString::FromUTF8(kEditorPageTitles[index]),false)) {panel->Hide();return;}
         page=editorPage(kind);
+        editors_->SetPageToolTip(page,"Editor selector. Close individual files using the document tabs inside this editor.");
     }
     editors_->Show();
     auto* bar=GetMenuBar();
@@ -431,6 +497,7 @@ bool WorkspaceFrame::closeEditorPage(int page) {
 }
 void WorkspaceFrame::showBrowserOnly() {
     detachActiveMenus();
+    GetMenuBar()->Enable(ID_CloseEditor,false);SetTitle("NeoToolKit Test - "+browserTitle_);
     browser_->Show();
     if(splitter_->IsSplit()) {
         splitter_->Unsplit(editors_);
@@ -493,7 +560,7 @@ bool WorkspaceFrame::openResource(neoshared::ResourceDocument resource,const std
     if(replacement) {replacement->module=module;resource=std::move(*replacement);}
     return openSnapshot(std::move(resource),editor,true);
 }
-bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession) {
+bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession,std::shared_ptr<ArchiveContext> archive) {
     const auto inputs=resource.protectedInputs;
     const auto selected=selectResourceEditor(editorsForResource(resource),editor);
     normalizeResourceTypeForEditor(resource);
@@ -516,7 +583,8 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::Textures:ok=textures_->openResource(std::move(resource));break;
     case EditorKind::Archives:ok=archives_->openResource(std::move(resource));break;
     case EditorKind::Modules:
-        showEditor(selected);ok=modules_->openResource(std::move(resource));break;
+        showEditor(selected);ok=modules_->openResource(std::move(resource),std::move(archive));break;
+    case EditorKind::Stores:showEditor(selected);ok=stores_->openResource(std::move(resource),std::move(archive));break;
     }
     if(ok) {
         if(protectSession) for(const auto& input:inputs) if(std::find(protectedInputs_.begin(),protectedInputs_.end(),input)==protectedInputs_.end())protectedInputs_.push_back(input);
@@ -551,6 +619,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& input,const std::stri
         case EditorKind::Items:showEditor(selected);ok=items_->openFile(path);break;
         case EditorKind::Placeables:showEditor(selected);ok=placeables_->openFile(path);break;
         case EditorKind::Creatures:showEditor(selected);ok=creatures_->openFile(path);break;
+        case EditorKind::Stores:showEditor(selected);ok=stores_->openFile(path);break;
         case EditorKind::Dialogues:ok=dialogues_->openFile(path);break;
         case EditorKind::Journals:ok=journals_->openFile(path);break;
         case EditorKind::Models:

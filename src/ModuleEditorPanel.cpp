@@ -49,7 +49,7 @@ constexpr float kDegrees=57.29577951308232f;
 enum {ID_OpenModule=wxID_HIGHEST+24000,ID_ModuleAssets,ID_RefreshArea,
       ID_SaveResources,ID_SaveModule,ID_FrameArea,ID_FrameObject,ID_DuplicateObject,ID_DeleteObject,ID_SceneReport,ID_AddObject,
       ID_ModuleUndo,ID_ModuleRedo,ID_RedrawTrigger,ID_FinishPolygon,ID_CancelPolygon,ID_PackageModule,ID_EditBlueprint,
-      ID_PlaceArrival,ID_LinkTransition};
+      ID_PlaceArrival,ID_LinkTransition,ID_UpdateArchive,ID_ParentArchive};
 
 bool editableResource(std::uint16_t type) {return type==kAre||type==kIfo||type==kGit;}
 Key resourceKey(const ResourceDocument& source) {
@@ -139,15 +139,15 @@ std::shared_ptr<neomdl::GameResourceSession> openModuleAssets(const neoshared::g
 
 class ModuleEditor final : public ModuleEditorPanel {
 public:
-    ModuleEditor(wxWindow* parent,neomodules::Context context,bool transitionDestination=false)
-        : ModuleEditorPanel(parent,std::move(context)),transitionDestination_(transitionDestination),timer_(this) {
+    ModuleEditor(wxWindow* parent,neomodules::Context context,bool transitionDestination=false,GameResources games={},std::function<void(const std::filesystem::path&)> open={})
+        : ModuleEditorPanel(parent,std::move(context)),transitionDestination_(transitionDestination),games_(std::move(games)),openModule_(std::move(open)),timer_(this) {
         auto* root=new wxBoxSizer(wxVERTICAL);
         auto* tools=new wxWrapSizer(wxHORIZONTAL);
         const std::pair<int,const char*> actions[]={{ID_OpenModule,"Open module..."},
             {ID_ModuleAssets,"Game resources..."},{ID_RefreshArea,"Refresh 3D"},
             {ID_AddObject,"Add object..."},{ID_PlaceArrival,"Place arrival waypoint"},
             {ID_ModuleUndo,"Undo"},{ID_ModuleRedo,"Redo"},
-            {ID_SaveResources,"Save resources..."},{ID_SaveModule,"Save archive copy..."},{ID_PackageModule,"Package MOD..."},{ID_SceneReport,"Scene report..."}};
+            {ID_UpdateArchive,"Update parent archive"},{ID_ParentArchive,"Back to archive"},{ID_SaveResources,"Save resources to folder..."},{ID_SaveModule,"Save archive copy..."},{ID_PackageModule,"Package MOD..."},{ID_SceneReport,"Scene report..."}};
         for(const auto& action:actions)tools->Add(new wxButton(this,action.first,action.second),0,wxALL,3);
         if(transitionDestination_) {
             FindWindow(ID_OpenModule)->Hide();FindWindow(ID_ModuleAssets)->Hide();
@@ -476,10 +476,18 @@ public:
         dark_=dark;scale_=scale;wxui::applyTheme(this,dark);neoview::applyFontScale(this,scale);
         fields_->setAppearance(dark,scale);
     }
-    std::vector<std::filesystem::path> openPaths() const override {return inputs_;}
+    std::vector<std::filesystem::path> openPaths() const override {
+        auto inputs=inputs_;
+        if(parentArchive_)inputs.erase(std::remove_if(inputs.begin(),inputs.end(),[this](const auto& path){return neoshared::sameResourcePath(path,parentArchive_->sourcePath);}),inputs.end());
+        return inputs;
+    }
     void resourceContextChanged() override {
         if(blueprintEditor_)blueprintEditor_->applyPending();
-        modFolder_=context_.captureModFolder();hostResources_=captureHostResources();session_.reset();paletteSession_.reset();palette_->clear();
+        modFolder_=context_.captureModFolder();
+        const auto gameSource=session_?session_->installation()->installPath/"chitin.key":sourcePath_;
+        session_=games_?games_(moduleName_,gameSource):nullptr;
+        hostResources_=session_?session_->resolver():captureHostResources();
+        paletteSession_.reset();palette_->clear();
         if(blueprintEditor_)blueprintEditor_->clear();
         requestPreview();
     }
@@ -493,11 +501,11 @@ public:
             loading_.wait();loading_=std::future<Preview>{};canvas_->setLoading(false);
         }
         if(!dirty())return true;
-        const auto answer=wxMessageBox("Save the edited module resources before closing?",
+        const auto answer=wxMessageBox(parentArchive_?"Update the parent archive with these edits before closing? The archive must then be saved.":"Save the edited module resources before closing?",
             "Unsaved module edits",wxYES_NO|wxCANCEL|wxICON_QUESTION,this);
         if(answer==wxCANCEL)return false;
         if(answer==wxNO)return true;
-        try {return saveResources();}catch(const std::exception& e) {wxui::showError(this,e);return false;}
+        try {return parentArchive_?updateArchive():saveResources();}catch(const std::exception& e) {wxui::showError(this,e);return false;}
     }
     bool openFile(const std::filesystem::path& input,bool installed=false) override {
         try {
@@ -530,7 +538,7 @@ public:
                 }
             }
             if(resources.empty())throw std::runtime_error("This module contains no GIT, ARE or IFO resources.");
-            archivePath_=archive?path:std::filesystem::path{};
+            sourcePath_=path;parentArchive_.reset();archivePath_=archive?path:std::filesystem::path{};
             moduleName_=neomdl::resourceKey(neoshared::pathToUtf8(path.stem()));
             if(archive&&moduleName_.size()>2&&moduleName_.substr(moduleName_.size()-2)=="_s")moduleName_.resize(moduleName_.size()-2);
             if(moduleName_=="module")moduleName_=neomdl::resourceKey(neoshared::pathToUtf8(path.parent_path().filename()));
@@ -538,16 +546,23 @@ public:
             archiveResources_=neomdl::archiveResources(catalog_);
             hostResources_=captureHostResources();
             install_.reset();session_.reset();previewEnabled_=false;
-            installResources(std::move(resources),neoshared::pathToUtf8(path));
+            installResources(std::move(resources),neoshared::pathToUtf8(path),extension==".git"||extension==".are"?neoshared::pathToUtf8(path.stem()):std::string{});
             return true;
         } catch(const std::exception& e) {wxui::showError(this,e);return false;}
     }
-    bool openResource(ResourceDocument source) override {
+    bool openResource(ResourceDocument source,std::shared_ptr<ArchiveContext> parent={}) override {
         try {
             if(!canClose())return false;
             modFolder_=context_.captureModFolder();
             auto scope=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;
-            auto resolver=captureHostResources(scope.empty()?resourceKey(source).first:scope);
+            if(scope.empty())scope=resourceKey(source).first;
+            auto gameResources=parent&&parent->game?parent->game->resolver():captureHostResources(scope);
+            auto resolver=[parent,gameResources](const std::string& name,std::uint16_t type) {
+                if(parent)if(auto resource=parent->resources(name,type))return resource;
+                return gameResources(name,type);
+            };
+            const auto title=parent?parent->label+" > "+source.fileName:source.sourceDescription;
+            const auto resourceName=source.fileName;sourcePath_=source.sourcePath;
             std::map<Key,Resource> resources;
             const auto key=resourceKey(source);
             std::set<std::string> names;
@@ -565,9 +580,16 @@ public:
                 resources.emplace(Key{"module",kIfo},Resource{std::move(*ifo),{}});
             archivePath_.clear();localDirectory_.clear();catalog_=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
             archiveResources_=neomdl::archiveResources(catalog_);
-            hostResources_=std::move(resolver);moduleName_=names.empty()?key.first:*names.begin();
-            install_.reset();session_.reset();previewEnabled_=true;
-            installResources(std::move(resources),"Module resources from Game Explorer");
+            parentArchive_=std::move(parent);
+            if(parentArchive_)archiveResources_=parentArchive_->resources;
+            hostResources_=std::move(gameResources);moduleName_=scope;
+            install_.reset();session_=parentArchive_?parentArchive_->game:(games_?games_(scope,sourcePath_):nullptr);
+            if(session_) {
+                install_=*session_->installation();game_=install_->id=="kotor"?neomdl::model::GameVersion::Kotor1:neomdl::model::GameVersion::Kotor2;
+                gameChoice_->SetSelection(game_==neomdl::model::GameVersion::Kotor1?0:1);
+            }
+            previewEnabled_=true;
+            installResources(std::move(resources),title.empty()?resourceName:title);
             requestPreview();return true;
         } catch(const std::exception& e) {wxui::showError(this,e);return false;}
     }
@@ -621,7 +643,9 @@ private:
         file->Append(ID_RefreshArea,"Refresh 3D Preview");
         file->Append(ID_SceneReport,"Scene Report...");
         file->AppendSeparator();
-        file->Append(ID_SaveResources,"Save Resources...\tCtrl+S");
+        file->Append(ID_UpdateArchive,"Update Parent Archive\tCtrl+S");
+        file->Append(ID_ParentArchive,"Back to Parent Archive");
+        file->Append(ID_SaveResources,"Save Resources to Folder...");
         file->Append(ID_SaveModule,"Save Archive Copy...\tCtrl+Shift+S");
         file->Append(ID_PackageModule,"Package Combined MOD...");
         menus->Append(file,"Module");
@@ -643,9 +667,10 @@ private:
             if(title=="&Edit"||title=="&View")menus->Append(fieldMenus_->Remove(i),title=="&Edit"?"Fields":"Field View");
             else ++i;
         }
+        for(std::size_t i=0;i<menus->GetMenuCount();++i)moduleMenuRoots_.push_back(menus->GetMenu(i));
         setModuleMenus(menus);
     }
-    void installResources(std::map<Key,Resource> resources,const std::string& title) {
+    void installResources(std::map<Key,Resource> resources,const std::string& title,const std::string& selectedArea={}) {
         canvas_->setRoomConnections({});managedRoomResources_.clear();roomChoice_->Clear();roomViewActive_=false;selectedRoomEdge_.reset();
         canvas_->setWalkmeshLayers({});walkmeshes_.clear();walkmeshSnapshots_.clear();surfaceIdentity_.clear();walkmeshMaterial_->Clear();walkmeshTool_->SetSelection(0);
         placingArrival_=false;
@@ -664,7 +689,8 @@ private:
             if(key.second==kGit||key.second==kAre)names.insert(key.first);
         }
         for(const auto& name:names)areas_->Append(wxui::toWx(name));
-        if(!names.empty())areas_->SetSelection(0);
+        if(!selectedArea.empty())areas_->SetStringSelection(wxui::toWx(neomdl::resourceKey(selectedArea)));
+        else if(!names.empty())areas_->SetSelection(0);
         if(transitionDestination_)if(const auto ifo=resources_.find({"module",kIfo});ifo!=resources_.end()) {
             const auto& list=static_cast<const neogff::GffList&>(*ifo->second.model->gff().root()->GetFieldByLabel("Mod_Area_list"));
             areas_->SetStringSelection(wxui::toWx(list.GetStruct(0)->GetFieldByLabel("Area_Name")->GetString()));
@@ -676,6 +702,7 @@ private:
         history_.clear();historyIndex_=0;
         savedBytes_.clear();savedTemplateBytes_.clear();
         for(const auto& [key,resource]:resources_)savedBytes_.emplace(key,resource.snapshot);
+        parentBytes_=savedBytes_;
         rebuildObjects();activateAreaResource();selecting_=false;
         history_.push_back(captureEdit());refreshAreaControls();setAppearance(dark_,scale_);updateActions();
         setModuleStatusText("Module loaded. Edit a field or choose Game resources to load the 3D view.");
@@ -802,6 +829,7 @@ private:
     void startPreview();
     void tick();
     void mapOwners();
+    bool updateArchive();
     bool saveResources();
     bool saveArchive();
     bool packageModule(const std::string& outputName);
@@ -859,6 +887,14 @@ private:
         for(const auto id:{ID_ModuleAssets,ID_RefreshArea,ID_SaveResources,ID_SceneReport,ID_PackageModule}) {
             enableModuleCommand(id,loaded&&!busy);if(auto* control=FindWindow(id))control->Enable(loaded&&!busy);
         }
+        for(const auto id:{ID_UpdateArchive,ID_ParentArchive}) {
+            enableModuleCommand(id,loaded&&bool(parentArchive_)&&!busy);
+            FindWindow(id)->Show(bool(parentArchive_));FindWindow(id)->Enable(!busy);
+        }
+        for(auto* menu:moduleMenuRoots_) {
+            if(auto* item=menu->FindItem(ID_UpdateArchive))item->SetItemLabel(parentArchive_?"Update Parent Archive\tCtrl+S":"Update Parent Archive");
+            if(auto* item=menu->FindItem(ID_SaveResources))item->SetItemLabel(parentArchive_?"Save Resources to Folder...":"Save Resources to Folder...\tCtrl+S");
+        }
         const bool archive=loaded&&!archivePath_.empty()&&!busy;
         enableModuleCommand(ID_SaveModule,archive);FindWindow(ID_SaveModule)->Enable(archive);
         for(const auto id:{ID_FrameObject,ID_DuplicateObject,ID_DeleteObject}) {
@@ -873,7 +909,10 @@ private:
         }
         apply_->Enable(selected&&editing);for(auto* control:transform_)control->Enable(selected&&editing);
         if(selected)transform_[3]->Enable(editing&&placements_[objects_->GetSelection()].rotation!=Placement::Rotation::None);
-        if(loaded)sourceLabel_->SetLabel(wxui::toWx(sourceTitle_+(dirty()?" *":"")));
+        if(loaded) {
+            const auto title=wxui::toWx(sourceTitle_+(dirty()?" *":""));
+            sourceLabel_->SetLabel(title);setModuleTitle(title);
+        }
         updateGizmo();
     }
     void command(wxCommandEvent& event) {
@@ -882,7 +921,7 @@ private:
             case ID_OpenModule: {
                 wxFileDialog dialog(this,"Open live module",{},{},
                     "Module archives and resources|*.rim;*.RIM;*.mod;*.MOD;*.mzd;*.MZD;*.git;*.GIT;*.are;*.ARE;*.ifo;*.IFO",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
-                if(dialog.ShowModal()==wxID_OK)openFile(neosettings::pathFromWx(dialog.GetPath()));
+                if(dialog.ShowModal()==wxID_OK) {const auto path=neosettings::pathFromWx(dialog.GetPath());if(openModule_)openModule_(path);else openFile(path);}
                 return;
             }
             case ID_ModuleAssets:chooseAssets();return;
@@ -896,6 +935,8 @@ private:
             case ID_FinishPolygon:canvas_->finishAreaPolygon();return;
             case ID_CancelPolygon:canvas_->cancelAreaPolygon();return;
             case ID_RefreshArea:previewEnabled_=true;requestPreview();return;
+            case ID_UpdateArchive:updateArchive();return;
+            case ID_ParentArchive:parentArchive_->show();return;
             case ID_SaveResources:saveResources();return;
             case ID_SaveModule:saveArchive();return;
             case ID_PackageModule:packageModule(moduleName_);return;
@@ -970,16 +1011,21 @@ private:
     bool templatesDirty_{};
     std::vector<EditState> history_;std::size_t historyIndex_{};
     std::map<Key,ByteSnapshot> savedBytes_;
+    std::map<Key,ByteSnapshot> parentBytes_;
     std::map<Key,ByteSnapshot> savedTemplateBytes_;
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
-    std::filesystem::path archivePath_,localDirectory_,staging_;
+    std::filesystem::path archivePath_,localDirectory_,staging_,sourcePath_;
     std::vector<std::filesystem::path> inputs_;
     std::vector<Placement> placements_;
     std::vector<Vec3> encounterFootprint_;
     std::map<std::string,std::string> ownerPaths_;
     std::map<std::string,std::set<neomdl::LightOwnerId>> pathOwners_;
     std::string selectedPath_,moduleName_,sourceTitle_,previewError_;
+    std::shared_ptr<ArchiveContext> parentArchive_;
+    GameResources games_;
+    std::function<void(const std::filesystem::path&)> openModule_;
+    std::vector<wxMenu*> moduleMenuRoots_;
     neomdl::ResourceResolver hostResources_,archiveResources_;
     std::unique_ptr<neomdl::ModelDocument> document_;
     neomdl::model::GameVersion game_{neomdl::model::GameVersion::Kotor2};
@@ -1027,13 +1073,14 @@ void ModuleEditor::editCamera(const neomdl::AreaCameraRecord& camera) {
 
 neomdl::ResourceResolver ModuleEditor::moduleResources() const {
     std::map<Key,ResourceDocument> edits;
-    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.emplace(key,resource.source);
+    for(const auto& [key,resource]:resources_)edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.insert_or_assign(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
-    return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives=archiveResources_,local,mod=modFolder_,module=moduleName_,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+    return [edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives=archiveResources_,parent=bool(parentArchive_),local,mod=modFolder_,module=moduleName_,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
         const Key key{neomdl::resourceKey(name),type};if(const auto found=edits->find(key);found!=edits->end())return found->second;
+        if(parent)if(auto source=archives(name,type))return source;
         if(mod&&mod->shadows(name,type,module))return mod->resolve(name,type,module,neomdl::resourceLoadJob());
-        if(auto source=archives(name,type))return source;
+        if(!parent)if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
         return game(name,type);
     };
@@ -1044,7 +1091,7 @@ Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neom
     if(found!=resources_.end()) {fields_->activateResource(found->second.source.identity);return found->second;}
     const auto snapshot=std::make_shared<const std::vector<std::uint8_t>>(source.bytes);
     for(auto& state:history_) {state.bytes.emplace(key,snapshot);state.origins.emplace(key,resolver);}
-    templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,snapshot);identityKeys_[source.identity]=key;
+    templateOrigins_.emplace(key,resolver);savedBytes_.emplace(key,snapshot);parentBytes_.emplace(key,snapshot);identityKeys_[source.identity]=key;
     inputs_.insert(inputs_.end(),source.protectedInputs.begin(),source.protectedInputs.end());
     fields_->openResource(source);auto& resource=resources_.emplace(key,Resource{std::move(source),fields_->activeModel(),snapshot}).first->second;
     return resource;
@@ -1600,8 +1647,9 @@ void ModuleEditor::deleteObject() {
 
 std::optional<ResourceDocument> ModuleEditor::sceneTemplate(const std::string& name,std::uint16_t type) const {
     if(const auto found=addedTemplates_.find({name,type});found!=addedTemplates_.end())return found->second;
+    if(parentArchive_)if(auto source=archiveResources_(name,type))return source;
     if(modFolder_&&modFolder_->shadows(name,type,moduleName_))return modFolder_->resolve(name,type,moduleName_,neomdl::resourceLoadJob());
-    if(auto source=archiveResources_(name,type))return source;
+    if(!parentArchive_)if(auto source=archiveResources_(name,type))return source;
     if(!localDirectory_.empty())if(auto source=neomdl::directoryResources(localDirectory_)(name,type))return source;
     return session_?session_->resolve(name,type):hostResources_(name,type);
 }
@@ -2483,26 +2531,27 @@ void ModuleEditor::chooseAssets() {
 
 void ModuleEditor::startPreview() {
     std::map<Key,ResourceDocument> edits;
-    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.emplace(key,resource.source);
+    for(const auto& [key,resource]:resources_)edits.emplace(key,resource.source);
     for(const auto& [key,source]:addedTemplates_)edits.emplace(key,source);
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
     auto pending=canvas_->prepareAreaLoad();
     cancel_=std::make_shared<std::atomic<bool>>(false);loadingRevision_=revision_;requested_=false;
     canvas_->setLoading(true);setModuleStatusText("Loading the edited area...");
     loading_=std::async(std::launch::async,[scene=std::move(pending),edits=std::move(edits),
-        archives=archiveResources_,host=hostResources_,local,session=session_,installation=install_,
+        archives=archiveResources_,parent=bool(parentArchive_),host=hostResources_,local,session=session_,installation=install_,
         module=moduleName_,mod=modFolder_,area=areaName(),game=game_,cancel=cancel_]() mutable {
         neoshared::bif::JobControl job;job.cancelled=[cancel]{return cancel->load();};
         neomdl::ResourceLoadScope work(job);
         if(!session&&installation) {
             session=openModuleAssets(*installation,module,job,mod);
         }
-        auto resolver=[edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives,host,local,session,mod,module](const std::string& name,std::uint16_t type)
+        auto resolver=[edits=std::make_shared<const std::map<Key,ResourceDocument>>(std::move(edits)),archives,parent,host,local,session,mod,module](const std::string& name,std::uint16_t type)
                 ->std::optional<ResourceDocument> {
             const auto key=Key{neomdl::resourceKey(name),type};
             if(const auto found=edits->find(key);found!=edits->end())return found->second;
+            if(parent)if(auto resource=archives(name,type))return resource;
             if(mod&&mod->shadows(name,type,module))return mod->resolve(name,type,module,neomdl::resourceLoadJob());
-            if(auto resource=archives(name,type))return resource;
+            if(!parent)if(auto resource=archives(name,type))return resource;
             if(local)if(auto resource=local(name,type))return resource;
             if(session)return session->resolve(name,type);
             return host(name,type);
@@ -2564,13 +2613,26 @@ void ModuleEditor::tick() {
     if(cameraControls_->previewing()&&!loading_.valid()&&!requested_&&!canvas_->cameraScene().activeAreaCamera()) {cameraControls_->stopPreview();updateActions();}
 }
 
+bool ModuleEditor::updateArchive() {
+    if(blueprintEditor_)blueprintEditor_->applyPending();
+    std::vector<ResourceDocument> edits;
+    for(const auto& [key,resource]:resources_)if(*resource.snapshot!=*parentBytes_.at(key))edits.push_back(resource.source);
+    for(const auto& [key,source]:addedTemplates_) {
+        const auto saved=parentBytes_.find(key);
+        if(saved==parentBytes_.end()||source.bytes!=*saved->second)edits.push_back(source);
+    }
+    if(!edits.empty())parentArchive_->update(edits);
+    for(const auto& resource:edits)parentBytes_[resourceKey(resource)]=std::make_shared<const std::vector<std::uint8_t>>(resource.bytes);
+    saved();setModuleStatusText("Updated parent archive. Save the archive to write these changes to disk.");return true;
+}
+
 bool ModuleEditor::saveResources() {
     if(blueprintEditor_)blueprintEditor_->applyPending();
     wxDirDialog dialog(this,"Save module resources and imported templates to a working folder",{},wxDD_DEFAULT_STYLE);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
     std::vector<const ResourceDocument*> exports;
-    for(const auto& [key,resource]:resources_)if(editableResource(key.second))exports.push_back(&resource.source);
+    for(const auto& [key,resource]:resources_)exports.push_back(&resource.source);
     for(const auto& [key,source]:addedTemplates_)exports.push_back(&source);
     std::vector<std::filesystem::path> destinations;
     for(const auto* source:exports)destinations.push_back(directory/neoshared::pathFromUtf8(source->fileName));
@@ -2592,7 +2654,6 @@ bool ModuleEditor::saveArchive() {
     validateHostOutput(path,inputs_);
     neoshared::erf::ErfArchive archive(archivePath_);
     for(auto& [key,resource]:resources_) {
-        if(!editableResource(key.second))continue;
         writeResource(staging_,resource.source);
         archive.add_resource(staging_/neoshared::pathFromUtf8(resource.source.fileName),true);
     }
@@ -2620,17 +2681,19 @@ bool ModuleEditor::packageModule(const std::string& outputName) {
         }
         for(const auto& name:candidates)if(const auto found=siblings.find(name);found!=siblings.end())addArchive(found->second);
     }
-    if(session_)for(const auto& path:session_->moduleScope()->archives)addArchive(path);
+    if(session_&&session_->moduleScope())for(const auto& path:session_->moduleScope()->archives)addArchive(path);
     const auto sources=chooseModulePackageSources(this,std::move(archives),localDirectory_,dark_);if(!sources)return false;
     const auto local=localDirectory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(localDirectory_);
-    const auto resolve=[archives=archiveResources_,local,mod=modFolder_,module=moduleName_,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+    const auto resolve=[archives=archiveResources_,parent=bool(parentArchive_),local,mod=modFolder_,module=moduleName_,game=session_?session_->resolver():hostResources_](const std::string& name,std::uint16_t type)->std::optional<ResourceDocument> {
+        if(parent)if(auto source=archives(name,type))return source;
         if(mod&&mod->shadows(name,type,module))return mod->resolve(name,type,module,neomdl::resourceLoadJob());
-        if(auto source=archives(name,type))return source;
+        if(!parent)if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
         return game(name,type);
     };
     std::vector<ModulePackageInput> edits;
-    for(const auto& [key,resource]:resources_)if(editableResource(key.second))edits.push_back({resource.source,resolve});
+    if(parentArchive_)for(const auto& [key,source]:*parentArchive_->members)edits.push_back({source,resolve});
+    for(const auto& [key,resource]:resources_)edits.push_back({resource.source,resolve});
     for(const auto& [key,source]:addedTemplates_)edits.push_back({source,templateOrigins_.at(key)});
     std::vector<ModulePackageInput> inlineSources;for(const auto& [identity,source]:inlineSources_)inlineSources.push_back(source);
     ModulePackage package;
@@ -2664,8 +2727,8 @@ bool ModuleEditor::packageModule(const std::string& outputName) {
 
 } // namespace
 
-ModuleEditorPanel* createModuleEditorPanel(wxWindow* parent,neomodules::Context context) {
-    return new ModuleEditor(parent,std::move(context));
+ModuleEditorPanel* createModuleDocument(wxWindow* parent,neomodules::Context context,GameResources games,std::function<void(const std::filesystem::path&)> open) {
+    return new ModuleEditor(parent,std::move(context),false,std::move(games),std::move(open));
 }
 
 } // namespace neotoolkit

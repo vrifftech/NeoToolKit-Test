@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NeoModulePanel.hpp"
+#include "ArchiveContext.hpp"
 #include <neoshared/ResourceDocument.hpp>
 
 namespace neotoolkit {
@@ -9,9 +10,11 @@ class ModuleEditorPanel : public neomodules::Panel {
 public:
     using Panel::Panel;
     virtual bool openFile(const std::filesystem::path& path,bool installed=false)=0;
-    virtual bool openResource(neoshared::ResourceDocument resource)=0;
+    virtual bool openResource(neoshared::ResourceDocument resource,std::shared_ptr<ArchiveContext> archive={})=0;
 };
 
-ModuleEditorPanel* createModuleEditorPanel(wxWindow* parent,neomodules::Context context);
+ModuleEditorPanel* createModuleEditorPanel(wxWindow* parent,neomodules::Context context,GameResources games);
+ModuleEditorPanel* createModuleDocument(wxWindow* parent,neomodules::Context context,GameResources games,
+    std::function<void(const std::filesystem::path&)> open);
 
 }

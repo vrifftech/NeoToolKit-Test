@@ -22,8 +22,8 @@ namespace {
 const neogff::GffList* inventory(const neogff::GffStruct& root) {return static_cast<const neogff::GffList*>(root.GetFieldByLabel("ItemList"));}
 }
 
-BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
-    :wxDialog(parent,wxID_ANY,"Blueprint",wxDefaultPosition,parent->FromDIP(wxSize(1120,720)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER),actions_(std::move(actions)) {
+BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
+    :wxPanel(parent),actions_(std::move(actions)) {
     auto* box=new wxBoxSizer(wxVERTICAL);source_=new wxStaticText(this,wxID_ANY,{});box->Add(source_,0,wxEXPAND|wxALL,8);
     auto* tools=new wxWrapSizer(wxHORIZONTAL);
     const auto command=[&](const char* label,std::function<void()> action) {
@@ -31,9 +31,11 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
         button->Bind(wxEVT_BUTTON,[this,action=std::move(action)](wxCommandEvent&){try {applyPending();action();}catch(const std::exception& e){wxui::showError(this,e);}});
         return button;
     };
-    command("All fields",[this]{Hide();actions_.fields();});
+    command("All fields",actions_.fields);
     undo_=command("Undo",actions_.undo);redo_=command("Redo",actions_.redo);
-    command("Save resources...",actions_.save);command("Package MOD...",actions_.package);
+    undo_->Show(bool(actions_.undo));redo_->Show(bool(actions_.redo));
+    save_=command(actions_.saveLabel.c_str(),actions_.save);
+    if(actions_.package)command("Package MOD...",actions_.package);
     box->Add(tools,0,wxEXPAND|wxLEFT|wxRIGHT,5);
     auto* split=split_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);auto* tabs=new wxNotebook(split,wxID_ANY);
     properties_=new wxScrolledWindow(tabs);properties_->SetScrollRate(0,FromDIP(12));tabs->AddPage(properties_,"Properties / scripts");
@@ -60,16 +62,15 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     const auto updateState=[this,credits,bonus,onHand](wxCommandEvent&){preview_->setPlayerState(unsigned(credits->GetValue()),bonus->GetValue(),unsigned(onHand->GetValue()));};
     for(auto* value:{credits,bonus,onHand})value->Bind(wxEVT_TEXT,updateState);
     previewBox->Add(state,0,wxEXPAND);
-    previewStatus_=new wxStaticText(previewPage_,wxID_ANY,"Choose Game resources in the module editor to load the shop's GUI, textures and font atlas.");previewStatus_->Wrap(FromDIP(600));previewBox->Add(previewStatus_,0,wxEXPAND|wxALL,6);
+    previewStatus_=new wxStaticText(previewPage_,wxID_ANY,"Choose Game resources to load the shop's GUI, textures and font atlas.");previewStatus_->Wrap(FromDIP(600));previewBox->Add(previewStatus_,0,wxEXPAND|wxALL,6);
     auto* sources=new wxButton(previewPage_,wxID_ANY,"Preview asset sources...");previewBox->Add(sources,0,wxALL,4);
     sources->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){wxDialog d(this,wxID_ANY,"Shop preview sources",wxDefaultPosition,FromDIP(wxSize(700,430)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* s=new wxBoxSizer(wxVERTICAL);s->Add(new wxTextCtrl(&d,wxID_ANY,wxui::toWx(preview_->sources()),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY),1,wxEXPAND|wxALL,8);s->Add(d.CreateButtonSizer(wxOK),0,wxALIGN_RIGHT|wxALL,8);d.SetSizer(s);d.ShowModal();});
     loadPreview_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){loadPreview();});previewPage_->SetSizer(previewBox);
     previews_->AddPage(previewPage_,"Shop preview");itemPreview_=new ItemPreview(previews_,[this]()->const auto&{return *root_;},[this]{return resolver_;});previews_->AddPage(itemPreview_,"Item / 3D preview");
     split->SetMinimumPaneSize(FromDIP(300));split->SplitVertically(tabs,previews_,FromDIP(360));split->SetSashGravity(0.3);box->Add(split,1,wxEXPAND|wxALL,4);SetSizer(box);
-    Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){applyPending();Hide();event.Veto();});
 }
 
-void BlueprintEditor::buildProperties(std::uint16_t type) {
+void BlueprintPanel::buildProperties(std::uint16_t type) {
     for(auto& r:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(r.control))text->DiscardEdits();
     rows_.clear();properties_->DestroyChildren();
     auto* box=new wxBoxSizer(wxVERTICAL);properties_->SetSizer(box);
@@ -112,9 +113,10 @@ void BlueprintEditor::buildProperties(std::uint16_t type) {
     for(const auto& name:scripts)add(name,name);
     auto* note=new wxStaticText(properties_,wxID_ANY,"Only fields present in the template are enabled. Other fields and translations are available through All fields.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);properties_->FitInside();
 }
-void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
+void BlueprintPanel::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
     if(type_!=type||game_!=game) {if(type!=2044&&type!=2027)buildProperties(type);preview_->clear();itemPreview_->clear();type_=type;game_=game;}
-    session_=std::move(session);catalog_=std::move(catalog);directory_=directory;SetTitle(wxui::toWx(title));source_->SetLabel(wxui::toWx(title+" — module override; affects instances using this template. Save resources or Package MOD includes edits."));
+    preview_->clear();previewStatus_->SetLabel("Choose Game resources, then Load game GUI to view this merchant with the game assets.");
+    session_=std::move(session);catalog_=std::move(catalog);directory_=directory;source_->SetLabel(wxui::toWx(title+actions_.sourceNote));
     const bool object=type==2044||type==2027;split_->Show(!object);
     if(object) {
         if(!object_||object_->type()!=type) {
@@ -132,7 +134,7 @@ void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,co
     layout_->ChangeValue(k1?"store":"store_p");add_->Enable(bool(session_));loadPreview_->Enable(store&&bool(session_));
     refresh(root,std::move(resolver));Layout();Show();Raise();
 }
-void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged) {
+void BlueprintPanel::refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged) {
     root_=&root;resolver_=std::move(resolver);
     if(type_==2044||type_==2027) {
         if(type_==2027&&itemsChanged)object_->open(root,resolver_,game_);else object_->refresh(root,resolver_);
@@ -159,7 +161,7 @@ void BlueprintEditor::refresh(const neogff::GffStruct& root,neomdl::ResourceReso
     if(type_==2051)try {preview_->setStore(root,resolver_,int(selected));}catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));}
     if(type_==2025)itemPreview_->refreshItem();
 }
-void BlueprintEditor::commit(std::size_t index) {
+void BlueprintPanel::commit(std::size_t index) {
     try {
         auto& row=rows_[index];std::string value,path=row.field;
         if(row.kind==Kind::Flag)value=static_cast<wxCheckBox*>(row.control)->GetValue()?"1":"0";
@@ -170,18 +172,18 @@ void BlueprintEditor::commit(std::size_t index) {
         actions_.edit(path,{},value,row.label);
     } catch(const std::exception& e){wxui::showError(this,e);}
 }
-void BlueprintEditor::selectStock(int index) {
+void BlueprintPanel::selectStock(int index) {
     const bool selected=index>=0;duplicate_->Enable(selected);remove_->Enable(selected);itemFields_->Enable(selected);infinite_->Enable(selected);
     const auto* flag=selected?static_cast<const neogff::GffByteField*>(inventory(*root_)->GetStruct(index)->GetFieldByLabel("Infinite")):nullptr;infinite_->SetValue(flag&&(flag->value&1));
     preview_->selectInventory(index);
 }
-void BlueprintEditor::addItem() {
+void BlueprintPanel::addItem() {
     wxDialog dialog(this,wxID_ANY,"Add shop inventory item",wxDefaultPosition,FromDIP(wxSize(760,570)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* box=new wxBoxSizer(wxVERTICAL);
     auto* picker=new ObjectPalette(&dialog,true);picker->setResources(session_,catalog_,directory_);box->Add(picker,1,wxEXPAND|wxALL,6);box->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALIGN_RIGHT|wxALL,6);dialog.SetSizer(box);
     auto* ok=static_cast<wxButton*>(dialog.FindWindow(wxID_OK));ok->SetLabel("Add item");ok->Disable();picker->Bind(EVT_BLUEPRINT_SELECTION_CHANGED,[ok,picker](wxCommandEvent&){ok->Enable(picker->selectedType()==2025);});
     if(dialog.ShowModal()==wxID_OK)actions_.addItem(picker->selectedBlueprint(),picker->selectedResources());
 }
-void BlueprintEditor::loadPreview() {
+void BlueprintPanel::loadPreview() {
     try {
         neomdl::ResourceLoadScope loading(neomdl::resourceLoadJob());
         const auto& install=*session_->installation();const auto path=neoshared::game::findExistingPathCaseInsensitive(install.installPath/"dialog.tlk");
@@ -190,8 +192,26 @@ void BlueprintEditor::loadPreview() {
         previewStatus_->SetLabel("Buy-page preview uses game assets, generated item details and merged stacks. Click a preview row to select its source stock entry. Preview credits and markup do not change the store. K1 uses a 1024x768 desktop.");previewStatus_->Wrap(FromDIP(580));
     } catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));wxui::showError(this,e);}
 }
-void BlueprintEditor::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();itemPreview_->clear();if(object_)object_->clear();Hide();}
-void BlueprintEditor::setHistory(bool undo,bool redo) {undo_->Enable(undo);redo_->Enable(redo);}
-void BlueprintEditor::selectInventory(std::size_t index) {stock_->SetItemState(long(index),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(index));}
+void BlueprintPanel::applyPending() {
+    if(object_)object_->applyPending();
+    for(std::size_t i=0;i<rows_.size();++i)if(auto* text=dynamic_cast<wxTextCtrl*>(rows_[i].control))
+        if(text->IsModified())commit(i);
+}
+void BlueprintPanel::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();itemPreview_->clear();if(object_)object_->clear();Hide();}
+void BlueprintPanel::setSaveLabel(const std::string& label) {save_->SetLabel(wxui::toWx(label));}
+void BlueprintPanel::setHistory(bool undo,bool redo) {undo_->Enable(undo);redo_->Enable(redo);}
+void BlueprintPanel::selectInventory(std::size_t index) {stock_->SetItemState(long(index),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(index));}
+
+BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
+    :wxDialog(parent,wxID_ANY,"Blueprint",wxDefaultPosition,parent->FromDIP(wxSize(1120,720)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER) {
+    auto fields=std::move(actions.fields);actions.fields=[this,fields=std::move(fields)]{Hide();fields();};
+    panel_=new BlueprintPanel(this,std::move(actions));auto* box=new wxBoxSizer(wxVERTICAL);box->Add(panel_,1,wxEXPAND);SetSizer(box);
+    Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){applyPending();Hide();event.Veto();});
+}
+void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
+    neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
+    std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
+    SetTitle(wxui::toWx(title));panel_->open(type,game,title,root,std::move(resolver),std::move(session),std::move(catalog),directory);Show();Raise();
+}
 
 }

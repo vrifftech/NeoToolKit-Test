@@ -98,8 +98,8 @@ void ObjectPalette::setResources(std::shared_ptr<neomdl::GameResourceSession> se
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,std::filesystem::path directory) {
     active_=std::move(session);selected_=active_;catalog_=std::move(catalog);directory_=std::move(directory);
     archiveResources_=neomdl::archiveResources(catalog_);
-    scopes_.clear();scope_->Clear();scope_->Append("Current module + game files");
-    for(const auto& module:active_->modules())if(module.name!=active_->moduleScope()->name) {
+    scopes_.clear();scope_->Clear();scope_->Append(active_->moduleScope()?"Current module + game files":"Game files");
+    for(const auto& module:active_->modules())if(!active_->moduleScope()||module.name!=active_->moduleScope()->name) {
         scopes_.push_back(module);scope_->Append(wxui::toWx(module.name));
     }
     scope_->SetSelection(0);scope_->Enable();kind_->Enable();search_->Enable();rebuild();
@@ -135,7 +135,7 @@ void ObjectPalette::rebuild() {
             }
         }
     }
-    if(auto mod=selected_->modFolder())for(const auto* entry:mod->resources(selected_->moduleScope()->name))
+    if(auto mod=selected_->modFolder())for(const auto* entry:mod->resources(selected_->moduleScope()?selected_->moduleScope()->name:std::string{}))
         if(std::find(types.begin(),types.end(),entry->type)!=types.end())entries.insert_or_assign({neomdl::resourceKey(entry->resref),entry->type},neomdl::GameResourceEntry{entry->resref,entry->type,"Mod folder: "+neoshared::pathToUtf8(mod->root())});
     for(auto& entry:selected_->resources(types))entries.emplace(std::make_pair(entry.resref,entry.type),std::move(entry));
     blueprints_.clear();for(auto& [key,entry]:entries)blueprints_.push_back(std::move(entry));filter();
@@ -160,7 +160,7 @@ neomdl::ResourceResolver ObjectPalette::selectedResources() const {
     auto resolve=selected_->resolver();
     if(scope_->GetSelection()!=0)return resolve;
     auto local=directory_.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory_);
-    return [archives=archiveResources_,local,resolve,mod=selected_->modFolder(),module=selected_->moduleScope()->name](const std::string& name,std::uint16_t type)->std::optional<neoshared::ResourceDocument> {
+    return [archives=archiveResources_,local,resolve,mod=selected_->modFolder(),module=selected_->moduleScope()?selected_->moduleScope()->name:std::string{}](const std::string& name,std::uint16_t type)->std::optional<neoshared::ResourceDocument> {
         if(mod&&mod->shadows(name,type,module))return mod->resolve(name,type,module,neomdl::resourceLoadJob());
         if(auto source=archives(name,type))return source;
         if(local)if(auto source=local(name,type))return source;
