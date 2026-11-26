@@ -70,7 +70,7 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
             selectEditor(static_cast<std::size_t>(EditorKind::Archives));
         }
     });
-    static_assert(neobif::ui::kBrowserApiVersion>=6,"Update NeoBIF: owned resource resolver snapshots required");
+    static_assert(neobif::ui::kBrowserApiVersion>=7,"Update NeoBIF: background indexing and installation-scoped resource snapshots required");
     browser_->setOpenHandler({[](std::uint16_t type){return !editorsForType(type).empty();},
         [this](neoshared::ResourceDocument resource){openResource(std::move(resource));},
         [](std::uint16_t type){
@@ -145,12 +145,14 @@ void WorkspaceFrame::setModFolder(const std::filesystem::path& path) {
 }
 neoshared::ResourceResolver WorkspaceFrame::captureResources(const std::string& module) {
     if(const auto found=resourceResolvers_.find(module);found!=resourceResolvers_.end())return found->second;
+    if(!browser_->indexComplete()) {
+        // Browse/open the published KEY/BIF snapshot while the rest is loading.
+        // NeoBIF notifies titleChanged when the active index or installation changes.
+        auto resolver=neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);
+        resourceResolvers_.emplace(module,resolver);return resolver;
+    }
     if(!resourceSession_) {
-        std::filesystem::path key;
-        for(const auto& path:browser_->sourcePaths()) {
-            auto name=neoshared::pathToUtf8(path.filename());std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return char(std::tolower(c));});
-            if(name=="chitin.key") {key=path;break;}
-        }
+        const auto key=browser_->activeKeyPath();
         auto install=key.empty()?std::optional<neoshared::game::GameInstall>{}:neoshared::game::inspectGameInstallation(key.parent_path());
         if(!install||(install->id!="kotor"&&install->id!="kotor2")) {
             auto resolver=neoshared::bif::ModFolder::layer(modFolder_,browser_->captureResourceResolver(),module);

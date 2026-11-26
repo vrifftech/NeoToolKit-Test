@@ -14,7 +14,7 @@ public:
         auto* frame = new neotoolkit::WorkspaceFrame;
         frame->SetIcon(wxIcon(neotoolkit_icon_xpm));
         frame->Show();
-#if !defined(__EMSCRIPTEN__)
+#if defined(NEO_UPDATE_APPLICATION)
         neoupdate::install(*frame, NEO_UPDATE_APPLICATION, NEO_UPDATE_VERSION);
 #endif
 
