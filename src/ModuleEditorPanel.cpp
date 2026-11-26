@@ -1204,7 +1204,7 @@ void ModuleEditor::restoreEdit(std::size_t index) {
     selecting_=false;restoreWalkmeshes();
     if(spatialOnly) {restoreRoomVisibility();updateActions();}else requestPreview();
     if(blueprint)refreshBlueprintEditor(itemsChanged);
-    setModuleStatusText(index==0?"Restored the original module resources.":"Restored: "+wxui::toWx(state.action));
+    setModuleStatusText(wxui::toWx(index==0?"Restored the original module resources.":"Restored: "+state.action));
 }
 
 EncounterSpatial ModuleEditor::encounterSpatial(const Placement& p) const {
