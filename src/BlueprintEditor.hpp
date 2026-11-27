@@ -37,7 +37,7 @@ public:
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
     void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged=false);
     void clear();
-    void applyPending();
+    bool applyPending();
     void setSaveLabel(const std::string& label);
     void setHistory(bool undo,bool redo);
     void selectInventory(std::size_t index);
@@ -45,7 +45,7 @@ private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
     struct Row {std::string field,label;Kind kind;wxWindow* control;};
     void buildProperties(std::uint16_t type);
-    void commit(std::size_t index);
+    bool commit(std::size_t index);
     void selectStock(int index);
     void addItem();
     void loadPreview();
@@ -80,7 +80,7 @@ public:
         std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory);
     void refresh(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,bool itemsChanged=false) {panel_->refresh(root,std::move(resolver),itemsChanged);}
     void clear() {panel_->clear();Hide();}
-    void applyPending() {panel_->applyPending();}
+    bool applyPending() {return panel_->applyPending();}
     void setHistory(bool undo,bool redo) {panel_->setHistory(undo,redo);}
     void selectInventory(std::size_t index) {panel_->selectInventory(index);}
 private:

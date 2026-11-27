@@ -10,5 +10,5 @@ public:
     virtual bool openResource(neoshared::ResourceDocument source,std::shared_ptr<ArchiveContext> archive={})=0;
 };
 StoreEditorPanel* createStoreEditorPanel(wxWindow* parent,neomodules::Context context,GameResources games,
-    std::function<void(neoshared::ResourceDocument)> open);
+    std::function<void(neoshared::ResourceDocument,std::shared_ptr<ArchiveContext>)> open);
 }

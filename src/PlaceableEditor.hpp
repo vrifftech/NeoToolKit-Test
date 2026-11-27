@@ -23,7 +23,7 @@ public:
     void open(const neogff::GffStruct& root,neomdl::ResourceResolver resolver,neomdl::model::GameVersion game);
     void refresh(const neogff::GffStruct& root);
     void refresh(const neogff::GffStruct& root,const neomdl::ResourceResolver& resolver) {tables_.resolver=resolver;refresh(root);}
-    void applyPending();
+    bool applyPending();
     void clear();
     std::vector<std::filesystem::path> openPaths() const;
 private:
@@ -32,7 +32,7 @@ private:
         std::string field,type,label;Kind kind;wxWindow* control;
         double initial{};bool k2{};std::vector<unsigned> values;bool edited{};
     };
-    void commit(std::size_t index);
+    bool commit(std::size_t index);
     void loadChoices();
     void updatePreview();
     void updateCreaturePreview();
@@ -57,7 +57,7 @@ class ObjectEditorPanel : public neomodules::Panel {
 public:
     using Panel::Panel;
     virtual bool openFile(const std::filesystem::path& path)=0;
-    virtual bool openResource(neoshared::ResourceDocument resource)=0;
+    virtual bool openResource(neoshared::ResourceDocument resource,neoshared::ResourceResolverFactory resources={})=0;
 };
 ObjectEditorPanel* createObjectEditorPanel(wxWindow* parent,neomodules::Context context,std::uint16_t type);
 

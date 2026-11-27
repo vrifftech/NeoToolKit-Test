@@ -37,6 +37,7 @@ private:
     neoshared::ResourceResolver captureResources(const std::string& module={});
     bool openSnapshot(neoshared::ResourceDocument resource,const std::string& editor,bool protectSession,std::shared_ptr<ArchiveContext> archive={});
     std::shared_ptr<neomdl::GameResourceSession> captureGameResources(const std::string& module,const std::filesystem::path& source={});
+    neoshared::ResourceResolverFactory captureSourceResources(const neoshared::ResourceDocument&,const std::shared_ptr<ArchiveContext>& archive={});
     std::shared_ptr<ArchiveContext> captureArchiveContext(const neoshared::ResourceDocument& resource);
     struct Menu {wxString title;std::unique_ptr<wxMenu> menu;};
     void buildMenus();

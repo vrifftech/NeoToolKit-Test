@@ -493,7 +493,7 @@ public:
         return fields_->activateResource(identity);
     }
     void resourceContextChanged() override {
-        if(blueprintEditor_)blueprintEditor_->applyPending();
+        if(blueprintEditor_&&!blueprintEditor_->applyPending())return;
         modFolder_=context_.captureModFolder();
         const auto gameSource=session_?session_->installation()->installPath/"chitin.key":sourcePath_;
         session_=games_?games_(moduleName_,gameSource):nullptr;
@@ -503,7 +503,7 @@ public:
         requestPreview();
     }
     bool canClose() override {
-        if(blueprintEditor_)blueprintEditor_->applyPending();
+        if(blueprintEditor_&&!blueprintEditor_->applyPending())return false;
         canvas_->cancelWalkmeshStroke();
         canvas_->cancelAreaPolygon();
         canvas_->cancelAreaGizmo();
@@ -1119,7 +1119,7 @@ Resource& ModuleEditor::openBlueprintResource(ResourceDocument source,const neom
 }
 
 void ModuleEditor::editBlueprint() {
-    if(blueprintEditor_)blueprintEditor_->applyPending();
+    if(blueprintEditor_&&!blueprintEditor_->applyPending())return;
     const auto& p=placements_.at(objects_->GetSelection());
     const auto& kind=*std::find_if(kObjectKinds.begin(),kObjectKinds.end(),[&](const auto& k){return p.list==k.list;});
     const auto& root=*resources_.at(identityKeys_.at(p.identity)).model->gff().root();
@@ -2635,7 +2635,7 @@ void ModuleEditor::tick() {
 }
 
 bool ModuleEditor::updateArchive() {
-    if(blueprintEditor_)blueprintEditor_->applyPending();
+    if(blueprintEditor_&&!blueprintEditor_->applyPending())return false;
     std::vector<ResourceDocument> edits;
     for(const auto& [key,resource]:resources_)if(*resource.snapshot!=*parentBytes_.at(key))edits.push_back(resource.source);
     for(const auto& [key,source]:addedTemplates_) {
@@ -2648,7 +2648,7 @@ bool ModuleEditor::updateArchive() {
 }
 
 bool ModuleEditor::saveResources() {
-    if(blueprintEditor_)blueprintEditor_->applyPending();
+    if(blueprintEditor_&&!blueprintEditor_->applyPending())return false;
     wxDirDialog dialog(this,"Save module resources and imported templates to a working folder",{},wxDD_DEFAULT_STYLE);
     if(dialog.ShowModal()!=wxID_OK)return false;
     const auto directory=neosettings::pathFromWx(dialog.GetPath());
@@ -2669,7 +2669,7 @@ bool ModuleEditor::saveResources() {
 }
 
 bool ModuleEditor::saveArchive() {
-    if(blueprintEditor_)blueprintEditor_->applyPending();
+    if(blueprintEditor_&&!blueprintEditor_->applyPending())return false;
     const auto ext=neoshared::pathToUtf8(archivePath_.extension());
     const auto name=neoshared::pathToUtf8(archivePath_.stem())+"_edited"+ext;
     wxFileDialog dialog(this,"Save edited module archive copy",{},wxui::toWx(name),
@@ -2690,7 +2690,7 @@ bool ModuleEditor::saveArchive() {
 }
 
 bool ModuleEditor::packageModule(const std::string& outputName) {
-    if(blueprintEditor_)blueprintEditor_->applyPending();
+    if(blueprintEditor_&&!blueprintEditor_->applyPending())return false;
     std::vector<std::filesystem::path> archives;
     const auto addArchive=[&](const std::filesystem::path& path) {
         if(std::find(archives.begin(),archives.end(),path)==archives.end())archives.push_back(path);

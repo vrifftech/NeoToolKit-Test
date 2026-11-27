@@ -26,24 +26,25 @@ public:
         fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");
         box->Insert(0,fields_->moveDocumentTabs(this),0,wxEXPAND|wxLEFT|wxRIGHT,6);box->Add(tabs_,1,wxEXPAND);SetSizer(box);
         setModuleMenus(fields_->takeMenus().release());
-        Bind(wxEVT_MENU,[this](wxCommandEvent& event){editor_->applyPending();fields_->dispatch(event);refresh();});
+        Bind(wxEVT_MENU,[this](wxCommandEvent& event){if(!editor_->applyPending())return;fields_->dispatch(event);refresh();});
         Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& event){fields_->dispatch(event);});
         Bind(wxEVT_MENU_OPEN,[this](wxMenuEvent& event){fields_->dispatch(event);});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent&){refresh();});
-        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxCommandEvent&){editor_->applyPending();});
+        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxNotifyEvent& event){if(!editor_->applyPending())event.Veto();});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_SELECTED,[this](wxCommandEvent&){refresh();});
         fields_->Bind(neogff::ui::EVT_GFF_FIELD_SELECTED,[this](wxCommandEvent&){
             if(fields_->activeModel()!=selectedModel_)refresh();
         });
-        tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_) {editor_->applyPending();if(event.GetSelection()==0)refresh();}event.Skip();});
-        game_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){refresh(true);});resources->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){refresh(true);});
+        tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGING,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_&&!editor_->applyPending())event.Veto();else event.Skip();});
+        tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_&&event.GetSelection()==0)refresh();event.Skip();});
+        game_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){if(editor_->applyPending())refresh(true);});resources->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){if(editor_->applyPending())refresh(true);});
         editor_->clear();
     }
     ~ObjectBlueprints() override {DestroyChildren();}
-    bool openFile(const std::filesystem::path& path) override {editor_->applyPending();const auto opened=fields_->openFile(path);if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
-    bool openResource(neoshared::ResourceDocument source) override {editor_->applyPending();scopes_[source.identity]=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;const auto opened=fields_->openResource(std::move(source));if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
-    void resourceContextChanged() override {editor_->applyPending();refresh(true);}
-    bool canClose() override {editor_->applyPending();return fields_->canClose();}
+    bool openFile(const std::filesystem::path& path) override {if(!editor_->applyPending())return false;const auto opened=fields_->openFile(path);if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
+    bool openResource(neoshared::ResourceDocument source,neoshared::ResourceResolverFactory resources={}) override {if(!editor_->applyPending())return false;scopes_[source.identity]=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;const auto opened=fields_->openResource(std::move(source),std::move(resources));if(opened) {refresh(true);tabs_->ChangeSelection(0);}return opened;}
+    void resourceContextChanged() override {if(editor_->applyPending())refresh(true);}
+    bool canClose() override {return editor_->applyPending()&&fields_->canClose();}
     void setAppearance(bool dark,double scale) override {fields_->setAppearance(dark,scale);wxui::applyTheme(editor_,dark);neoview::applyFontScale(editor_,scale);}
     std::vector<std::filesystem::path> openPaths() const override {auto paths=fields_->openPaths();const auto preview=editor_->openPaths();paths.insert(paths.end(),preview.begin(),preview.end());return paths;}
 private:
@@ -55,7 +56,7 @@ private:
             editor_->Enable();
             if(resources||changed) {
                 const auto module=scopes_.find(identity);const auto scope=module==scopes_.end()?std::string{}:module->second;
-                auto captured=context_.captureScopedResourceResolver(scope);const auto directory=fields_->activeFilename().parent_path();
+                const auto factory=fields_->resourceResolverFactory();auto captured=factory?factory():context_.captureScopedResourceResolver(scope);const auto directory=fields_->activeFilename().parent_path();
                 auto local=directory.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory);
                 const auto mod=context_.captureModFolder();
                 editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local),mod,scope](const std::string& name,std::uint16_t type) {

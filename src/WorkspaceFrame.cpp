@@ -203,6 +203,24 @@ std::shared_ptr<neomdl::GameResourceSession> WorkspaceFrame::captureGameResource
     if(!scoped->openModule(*base,*found,error))throw std::runtime_error(error);
     return scoped;
 }
+neoshared::ResourceResolverFactory WorkspaceFrame::captureSourceResources(const neoshared::ResourceDocument& source,const std::shared_ptr<ArchiveContext>& archive) {
+    const auto module=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;
+    const auto game=archive?archive->game:captureGameResources(module,source.sourcePath);
+    const auto origin=game?game->installation()->installPath/"chitin.key":std::filesystem::path{};
+    const auto siblings=archive?archive->resources:neomdl::ResourceResolver{};
+    return [this,module,origin,siblings] {
+        const auto session=origin.empty()?std::shared_ptr<neomdl::GameResourceSession>{}:captureGameResources(module,origin);
+        const auto installed=session?session->resolver():neomdl::ResourceResolver{};
+        const auto browser=session?neoshared::ResourceResolver{}:captureResources(module);
+        neoshared::ResourceResolver resolver=[siblings,installed,browser](const std::string& name,std::uint16_t type,const neoshared::bif::JobControl& job)->std::optional<neoshared::ResourceDocument> {
+            neomdl::ResourceLoadScope loading(job);
+            if(siblings)if(auto resource=siblings(name,type))return resource;
+            if(installed)return installed(name,type);
+            return browser?browser(name,type,job):std::nullopt;
+        };
+        return neoshared::bif::ModFolder::layer(modFolder_,std::move(resolver),module);
+    };
+}
 std::shared_ptr<ArchiveContext> WorkspaceFrame::captureArchiveContext(const neoshared::ResourceDocument& resource) {
     auto context=std::make_shared<ArchiveContext>();
     const auto* archive=archives_->activeDocumentModel();
@@ -390,6 +408,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     };
     context.captureResourceResolver=[this]{return captureResources();};
     context.captureScopedResourceResolver=[this](const std::string& module){return captureResources(module);};
+    context.captureSourceResources=[this](const neoshared::ResourceDocument& source){return captureSourceResources(source);};
     context.captureModFolder=[this]{return modFolder_;};
     neomodules::Panel* panel=nullptr;
     switch(kind) {
@@ -405,7 +424,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Items:items_=createItemEditorPanel(editors_,context,games);panel=items_;break;
     case EditorKind::Placeables:placeables_=createObjectEditorPanel(editors_,context,2044);panel=placeables_;break;
     case EditorKind::Creatures:creatures_=createObjectEditorPanel(editors_,context,2027);panel=creatures_;break;
-    case EditorKind::Stores:stores_=createStoreEditorPanel(editors_,context,games,[this](auto resource){openSnapshot(std::move(resource),{},true);});panel=stores_;break;
+    case EditorKind::Stores:stores_=createStoreEditorPanel(editors_,context,games,[this](auto resource,auto archive){openSnapshot(std::move(resource),{},false,std::move(archive));});panel=stores_;break;
     case EditorKind::Textures:textures_=neotpc::ui::createEditorPanel(editors_,context);panel=textures_;break;
     case EditorKind::Archives:
         archives_=neoerf::ui::createEditorPanel(editors_,context);panel=archives_;
@@ -415,7 +434,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
             return result;
         },[this](neoshared::ResourceDocument resource,const std::string& editor){
             std::shared_ptr<ArchiveContext> archive;
-            if(editor=="module"||editor=="store"||editor=="item")archive=captureArchiveContext(resource);
+            if(editor=="module"||editor=="store"||editor=="item"||editor=="creature"||editor=="placeable"||editor=="neomdl"||editor=="neogui")archive=captureArchiveContext(resource);
             if(resource.module.empty())resource.module=neoshared::bif::ModFolder::moduleName(resource.sourcePath);
             openSnapshot(std::move(resource),editor,false,std::move(archive));
         }});
@@ -571,7 +590,9 @@ void WorkspaceFrame::checkOutputs(const std::vector<std::filesystem::path>& path
     const auto browserInputs=browser_->sourcePaths();
     inputs.insert(inputs.end(),browserInputs.begin(),browserInputs.end());
     for(auto* panel:panels())if(panel && panel!=owner) {
-        const auto open=panel->openPaths();inputs.insert(inputs.end(),open.begin(),open.end());
+        const auto open=panel->openPaths();
+        const auto archivePath=owner==archives_?archives_->activeDocumentModel()->path():std::filesystem::path{};
+        for(const auto& input:open)if(!neoshared::sameResourcePath(input,archivePath))inputs.push_back(input);
     }
     neoshared::checkResourceOutputs(paths,inputs,false);
 }
@@ -591,21 +612,24 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     const auto selected=selectResourceEditor(editorsForResource(resource),editor);
     normalizeResourceTypeForEditor(resource);
     ensureEditor(selected);
+    neoshared::ResourceResolverFactory resources;
+    if(selected==EditorKind::Gui||selected==EditorKind::Placeables||selected==EditorKind::Creatures||selected==EditorKind::Models)
+        resources=captureSourceResources(resource,archive);
     bool ok=false;
     switch(selected) {
     case EditorKind::Tables:ok=tables_->openResource(std::move(resource));break;
     case EditorKind::Soundsets:ok=soundsets_->openResource(std::move(resource));break;
     case EditorKind::TalkTables:ok=talkTables_->openResource(std::move(resource));break;
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
-    case EditorKind::Gui:ok=guis_->openResource(std::move(resource));break;
+    case EditorKind::Gui:ok=guis_->openResource(std::move(resource),std::move(resources));break;
     case EditorKind::Items:showEditor(selected);ok=items_->openResource(std::move(resource),std::move(archive));break;
-    case EditorKind::Placeables:showEditor(selected);ok=placeables_->openResource(std::move(resource));break;
-    case EditorKind::Creatures:showEditor(selected);ok=creatures_->openResource(std::move(resource));break;
+    case EditorKind::Placeables:showEditor(selected);ok=placeables_->openResource(std::move(resource),std::move(resources));break;
+    case EditorKind::Creatures:showEditor(selected);ok=creatures_->openResource(std::move(resource),std::move(resources));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
     case EditorKind::Journals:ok=journals_->openResource(std::move(resource));break;
     case EditorKind::Models:
         showEditor(selected);
-        ok=models_->openResource(std::move(resource));break;
+        ok=models_->openResource(std::move(resource),std::move(resources));break;
     case EditorKind::Textures:ok=textures_->openResource(std::move(resource));break;
     case EditorKind::Archives:ok=archives_->openResource(std::move(resource));break;
     case EditorKind::Modules:

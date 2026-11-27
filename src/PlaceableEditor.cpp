@@ -169,6 +169,8 @@ void ObjectEditor::open(const neogff::GffStruct& root,neomdl::ResourceResolver r
 void ObjectEditor::refresh(const neogff::GffStruct& root) {
     root_=&root;const bool k2=game_==neomdl::model::GameVersion::Kotor2;
     for(auto& row:rows_) {
+        const auto* text=dynamic_cast<wxTextCtrl*>(row.control);
+        if(row.edited||(text&&text->IsModified()))continue;
         if(row.label=="Plot / invulnerable")row.field=field<neogff::GffByteField>(root,"Invulnerable")?"Invulnerable":"Plot";
         const auto* value=root.GetFieldByLabel(row.field);row.control->Enable(!row.k2||k2);
         if(row.kind==Kind::Flag) {
@@ -221,9 +223,9 @@ void ObjectEditor::refresh(const neogff::GffStruct& root) {
     Layout();
 }
 
-void ObjectEditor::commit(std::size_t index) {
+bool ObjectEditor::commit(std::size_t index) {
     try {
-        auto& row=rows_[index];row.edited=false;std::string value,path=row.field;
+        auto& row=rows_[index];row.edited=true;std::string value,path=row.field;
         if(row.kind==Kind::Flag)value=static_cast<wxCheckBox*>(row.control)->GetValue()?"1":"0";
         else if(row.kind==Kind::Choice)value=std::to_string(row.values.at(std::size_t(static_cast<wxChoice*>(row.control)->GetSelection())));
         else if(row.kind==Kind::Number||row.kind==Kind::LocalizedRef)value=std::to_string(static_cast<long long>(std::llround(static_cast<wxSpinCtrlDouble*>(row.control)->GetValue())));
@@ -231,18 +233,22 @@ void ObjectEditor::commit(std::size_t index) {
             const auto color=static_cast<wxColourPickerCtrl*>(row.control)->GetColour();
             const auto original=number<neogff::GffUInt32Field>(*root_,row.field);
             value=std::to_string((original&0xff000000u)|unsigned(color.Red())|(unsigned(color.Green())<<8u)|(unsigned(color.Blue())<<16u));
-        } else {auto* input=static_cast<wxTextCtrl*>(row.control);value=wxui::toStd(input->GetValue());input->DiscardEdits();}
+        } else {auto* input=static_cast<wxTextCtrl*>(row.control);value=wxui::toStd(input->GetValue());}
         if(row.kind==Kind::LocalizedText)path+="(lang"+std::to_string(englishId(field<neogff::GffLocalizedStringField>(*root_,row.field)))+")";
         if(row.kind==Kind::LocalizedRef)path+="(strref)";
         edit_(path,row.type,value,row.label);
-    }catch(const std::exception& e){wxui::showError(this,e);}
+        row.edited=false;
+        if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();
+        return true;
+    }catch(const std::exception& e){wxui::showError(this,e);return false;}
 }
 
-void ObjectEditor::applyPending() {
+bool ObjectEditor::applyPending() {
     for(std::size_t i=0;i<rows_.size();++i) {
         const auto* text=dynamic_cast<wxTextCtrl*>(rows_[i].control);
-        if(rows_[i].edited||(text&&text->IsModified()))commit(i);
+        if((rows_[i].edited||(text&&text->IsModified()))&&!commit(i))return false;
     }
+    return true;
 }
 
 void ObjectEditor::updateCreaturePreview() {

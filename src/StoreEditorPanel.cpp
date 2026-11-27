@@ -20,7 +20,7 @@ class StoreEditor final : public StoreEditorPanel {
     };
 public:
     StoreEditor(wxWindow* parent,neomodules::Context context,GameResources games,
-        std::function<void(neoshared::ResourceDocument)> open)
+        std::function<void(neoshared::ResourceDocument,std::shared_ptr<ArchiveContext>)> open)
         :StoreEditorPanel(parent,std::move(context)),games_(std::move(games)) {
         auto* box=new wxBoxSizer(wxVERTICAL);
         auto* header=new wxBoxSizer(wxHORIZONTAL);
@@ -30,6 +30,7 @@ public:
         auto* assets=new wxButton(this,wxID_ANY,"Game resources...");header->Add(assets,0,wxALL,4);
         assets->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){
             try {
+                if(!merchant_->applyPending())return;
                 auto& store=current();
                 wxDirDialog dialog(this,"Choose the store's K1 or K2 installation",store.game?neosettings::pathToWx(store.game->installation()->installPath):wxString{},wxDD_DIR_MUST_EXIST);
                 if(dialog.ShowModal()!=wxID_OK)return;
@@ -66,7 +67,7 @@ public:
         actions.itemFields=[this,open=std::move(open)](const auto& name,std::uint16_t type){
             auto source=current().resources(name,type);
             if(!source)throw std::runtime_error("Cannot find item template "+name+".uti in this store's resources.");
-            open(std::move(*source));
+            open(std::move(*source),current().parent);
         };
         merchant_=new BlueprintPanel(tabs_,std::move(actions));tabs_->AddPage(merchant_,"Merchant / shop preview");
         auto child=context_;child.titleChanged=[this](const wxString& title){setModuleTitle(title);if(fields_&&fields_->activeModel()==selectedModel_&&selectedKey_!=key())refresh(true);};
@@ -77,27 +78,27 @@ public:
         for(std::size_t i=0;i<menus->GetMenuCount();++i)for(auto* item:menus->GetMenu(i)->GetMenuItems())
             if(item->GetItemLabelText()=="Save") {saveId_=item->GetId();saveItem_=item;}
         setModuleMenus(menus.release());
-        Bind(wxEVT_MENU,[this](wxCommandEvent& event){merchant_->applyPending();if(event.GetId()==saveId_)save();else fields_->dispatch(event);});
+        Bind(wxEVT_MENU,[this](wxCommandEvent& event){if(!merchant_->applyPending())return;if(event.GetId()==saveId_)save();else fields_->dispatch(event);});
         Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& event){fields_->dispatch(event);});
         Bind(wxEVT_MENU_OPEN,[this](wxMenuEvent& event){fields_->dispatch(event);});
         fields_->Bind(wxEVT_BUTTON,[this](wxCommandEvent& event){if(event.GetId()==saveId_)save();else event.Skip();});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_SELECTED,[this](wxCommandEvent&){refresh(true);});
-        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxCommandEvent&){merchant_->applyPending();});
+        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxNotifyEvent& event){if(!merchant_->applyPending())event.Veto();});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent&){refresh(false);});
-        tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_)merchant_->applyPending();event.Skip();});
+        tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGING,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_&&!merchant_->applyPending())event.Veto();else event.Skip();});
         box->Add(tabs_,1,wxEXPAND);SetSizer(box);merchant_->Disable();
     }
     ~StoreEditor() override {DestroyChildren();}
-    bool openFile(const std::filesystem::path& path) override {merchant_->applyPending();const bool ok=fields_->openFile(path);if(ok)tabs_->SetSelection(0);return ok;}
+    bool openFile(const std::filesystem::path& path) override {if(!merchant_->applyPending())return false;const bool ok=fields_->openFile(path);if(ok)tabs_->SetSelection(0);return ok;}
     bool openResource(neoshared::ResourceDocument source,std::shared_ptr<ArchiveContext> parent={}) override {
-        merchant_->applyPending();
+        if(!merchant_->applyPending())return false;
         if(fields_->activateResource(source.identity)) {tabs_->SetSelection(0);return true;}
         const auto identity=source.identity;stores_.insert_or_assign(identity,makeStore(source,std::move(parent)));
         const bool ok=fields_->openResource(std::move(source));if(ok)tabs_->SetSelection(0);else stores_.erase(identity);return ok;
     }
-    bool canClose() override {merchant_->applyPending();return fields_->canClose();}
+    bool canClose() override {return merchant_->applyPending()&&fields_->canClose();}
     void resourceContextChanged() override {
-        merchant_->applyPending();
+        if(!merchant_->applyPending())return;
         for(auto& [identity,store]:stores_) {
             const auto source=store.game?store.game->installation()->installPath/"chitin.key":store.source.sourcePath;
             store.game=games_(store.source.module,source);bindResources(store);
@@ -155,7 +156,7 @@ private:
     void edited() {fields_->activeModel()->gff().dirty(true);fields_->refreshActiveDocument();refresh(false);}
     void save() {
         try {
-            merchant_->applyPending();
+            if(!merchant_->applyPending())return;
             if(!fields_->activeModel()||!fields_->activeModel()->loaded()||fields_->activeModel()->fileType().compare(0,3,"UTM")!=0) {
                 wxCommandEvent event(wxEVT_MENU,saveId_);fields_->dispatch(event);return;
             }
@@ -176,7 +177,7 @@ private:
 };
 }
 StoreEditorPanel* createStoreEditorPanel(wxWindow* parent,neomodules::Context context,GameResources games,
-    std::function<void(neoshared::ResourceDocument)> open) {
+    std::function<void(neoshared::ResourceDocument,std::shared_ptr<ArchiveContext>)> open) {
     return new StoreEditor(parent,std::move(context),std::move(games),std::move(open));
 }
 }

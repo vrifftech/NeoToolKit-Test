@@ -60,6 +60,8 @@ private:
         auto identity=fields_->activeResourceIdentity();
         if(identity.empty())identity=neomdl::resourceFileIdentity(fields_->activeFilename());
         if(contextChanged||selectedModel_!=model||selectedIdentity_!=identity) {
+            if(selectedModel_==model&&selectedIdentity_!=identity)
+                sources_.insert_or_assign(identity,sources_.at(selectedIdentity_));
             if(!sources_.count(identity)) {
                 neoshared::ResourceDocument source;source.sourcePath=fields_->activeFilename();
                 sources_.emplace(identity,makeContext(std::move(source)));

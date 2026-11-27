@@ -28,7 +28,7 @@ BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
     auto* tools=new wxWrapSizer(wxHORIZONTAL);
     const auto command=[&](const char* label,std::function<void()> action) {
         auto* button=new wxButton(this,wxID_ANY,label);tools->Add(button,0,wxALL,3);
-        button->Bind(wxEVT_BUTTON,[this,action=std::move(action)](wxCommandEvent&){try {applyPending();action();}catch(const std::exception& e){wxui::showError(this,e);}});
+        button->Bind(wxEVT_BUTTON,[this,action=std::move(action)](wxCommandEvent&){try {if(applyPending())action();}catch(const std::exception& e){wxui::showError(this,e);}});
         return button;
     };
     command("All fields",actions_.fields);
@@ -147,7 +147,7 @@ void BlueprintPanel::refresh(const neogff::GffStruct& root,neomdl::ResourceResol
         if(row.kind==Kind::Flag)static_cast<wxCheckBox*>(row.control)->SetValue(field&&std::stoul(field->GetString())!=0);
         else if(row.kind==Kind::StoreMode)static_cast<wxChoice*>(row.control)->SetSelection(field?std::stoi(field->GetString())-1:wxNOT_FOUND);
         else {
-            auto* text=static_cast<wxTextCtrl*>(row.control);std::string value;
+            auto* text=static_cast<wxTextCtrl*>(row.control);if(text->IsModified())continue;std::string value;
             if(row.kind==Kind::LocalizedText) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);if(loc)value=neogff::decodeGffText(loc->GetStringById(0));}
             else if(row.kind==Kind::LocalizedRef) {const auto* loc=static_cast<const neogff::GffLocalizedStringField*>(field);value=loc&&loc->strref!=0xffffffffu?std::to_string(loc->strref):"-1";}
             else if(field)value=neogff::decodeGffText(field->GetString());
@@ -161,16 +161,18 @@ void BlueprintPanel::refresh(const neogff::GffStruct& root,neomdl::ResourceResol
     if(type_==2051)try {preview_->setStore(root,resolver_,int(selected));}catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));}
     if(type_==2025)itemPreview_->refreshItem();
 }
-void BlueprintPanel::commit(std::size_t index) {
+bool BlueprintPanel::commit(std::size_t index) {
     try {
         auto& row=rows_[index];std::string value,path=row.field;
         if(row.kind==Kind::Flag)value=static_cast<wxCheckBox*>(row.control)->GetValue()?"1":"0";
         else if(row.kind==Kind::StoreMode)value=std::to_string(static_cast<wxChoice*>(row.control)->GetSelection()+1);
-        else {auto* text=static_cast<wxTextCtrl*>(row.control);text->DiscardEdits();value=wxui::toStd(text->GetValue());
+        else {auto* text=static_cast<wxTextCtrl*>(row.control);value=wxui::toStd(text->GetValue());
             if(row.kind==Kind::LocalizedRef)path+="(strref)";else if(row.kind==Kind::LocalizedText)path+="(lang0)";
         }
         actions_.edit(path,{},value,row.label);
-    } catch(const std::exception& e){wxui::showError(this,e);}
+        if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();
+        return true;
+    } catch(const std::exception& e){wxui::showError(this,e);return false;}
 }
 void BlueprintPanel::selectStock(int index) {
     const bool selected=index>=0;duplicate_->Enable(selected);remove_->Enable(selected);itemFields_->Enable(selected);infinite_->Enable(selected);
@@ -192,10 +194,11 @@ void BlueprintPanel::loadPreview() {
         previewStatus_->SetLabel("Buy-page preview uses game assets, generated item details and merged stacks. Click a preview row to select its source stock entry. Preview credits and markup do not change the store. K1 uses a 1024x768 desktop.");previewStatus_->Wrap(FromDIP(580));
     } catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));wxui::showError(this,e);}
 }
-void BlueprintPanel::applyPending() {
-    if(object_)object_->applyPending();
+bool BlueprintPanel::applyPending() {
+    if(object_&&!object_->applyPending())return false;
     for(std::size_t i=0;i<rows_.size();++i)if(auto* text=dynamic_cast<wxTextCtrl*>(rows_[i].control))
-        if(text->IsModified())commit(i);
+        if(text->IsModified()&&!commit(i))return false;
+    return true;
 }
 void BlueprintPanel::clear() {for(auto& row:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(row.control))text->DiscardEdits();root_=nullptr;preview_->clear();itemPreview_->clear();if(object_)object_->clear();Hide();}
 void BlueprintPanel::setSaveLabel(const std::string& label) {save_->SetLabel(wxui::toWx(label));}
@@ -206,7 +209,7 @@ BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     :wxDialog(parent,wxID_ANY,"Blueprint",wxDefaultPosition,parent->FromDIP(wxSize(1120,720)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER) {
     auto fields=std::move(actions.fields);actions.fields=[this,fields=std::move(fields)]{Hide();fields();};
     panel_=new BlueprintPanel(this,std::move(actions));auto* box=new wxBoxSizer(wxVERTICAL);box->Add(panel_,1,wxEXPAND);SetSizer(box);
-    Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){applyPending();Hide();event.Veto();});
+    Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){if(applyPending())Hide();event.Veto();});
 }
 void BlueprintEditor::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,
     neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,
