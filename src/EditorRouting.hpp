@@ -21,7 +21,7 @@ inline std::string editorExtensionForPath(const std::filesystem::path& path) {
 inline std::vector<EditorChoice> editorsForExtension(std::string ext) {
     std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
     if(!ext.empty() && ext.front()!='.')ext='.'+ext;
-    if(ext==".rim"||ext==".mod")return {{EditorKind::Archives,"neoerf","Open with NeoERF"},
+    if(ext==".rim"||ext==".mod"||ext==".mzd")return {{EditorKind::Archives,"neoerf","Open with NeoERF"},
         {EditorKind::Modules,"module","Open with Live Module Editor"}};
     if(ext==".git"||ext==".are"||ext==".ifo")return {{EditorKind::Modules,"module","Open with Live Module Editor"},
         {EditorKind::Gff,"neogff","Open with NeoGFF"}};

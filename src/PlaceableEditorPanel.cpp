@@ -23,12 +23,15 @@ public:
         });
         tabs_->AddPage(editor_,type_==2027?"Creature":"Placeable",true);
         auto child=context_;child.validateOutputs=[this](const auto& paths,const auto*,const auto& inputs){validateHostOutputs(paths,inputs);};
-        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");box->Add(tabs_,1,wxEXPAND);SetSizer(box);
+        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");
+        box->Insert(0,fields_->moveDocumentTabs(this),0,wxEXPAND|wxLEFT|wxRIGHT,6);box->Add(tabs_,1,wxEXPAND);SetSizer(box);
         setModuleMenus(fields_->takeMenus().release());
         Bind(wxEVT_MENU,[this](wxCommandEvent& event){editor_->applyPending();fields_->dispatch(event);refresh();});
         Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& event){fields_->dispatch(event);});
         Bind(wxEVT_MENU_OPEN,[this](wxMenuEvent& event){fields_->dispatch(event);});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent&){refresh();});
+        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxCommandEvent&){editor_->applyPending();});
+        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_SELECTED,[this](wxCommandEvent&){refresh();});
         fields_->Bind(neogff::ui::EVT_GFF_FIELD_SELECTED,[this](wxCommandEvent&){
             if(fields_->activeModel()!=selectedModel_)refresh();
         });
@@ -45,13 +48,14 @@ public:
     std::vector<std::filesystem::path> openPaths() const override {auto paths=fields_->openPaths();const auto preview=editor_->openPaths();paths.insert(paths.end(),preview.begin(),preview.end());return paths;}
 private:
     void refresh(bool resources=false) {
-        const auto* model=fields_->activeModel();const auto identity=fields_->activeResourceIdentity();
+        const auto* model=fields_->activeModel();auto identity=fields_->activeResourceIdentity();
+        if(identity.empty())identity=neomdl::resourceFileIdentity(fields_->activeFilename());
         const bool changed=identity_!=identity||selectedModel_!=model;identity_=identity;selectedModel_=model;
         if(model&&model->loaded()&&model->fileType().compare(0,3,type_==2027?"UTC":"UTP")==0) {
             editor_->Enable();
             if(resources||changed) {
                 const auto module=scopes_.find(identity);const auto scope=module==scopes_.end()?std::string{}:module->second;
-                auto captured=context_.captureScopedResourceResolver(scope);const auto directory=model->filename().parent_path();
+                auto captured=context_.captureScopedResourceResolver(scope);const auto directory=fields_->activeFilename().parent_path();
                 auto local=directory.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(directory);
                 const auto mod=context_.captureModFolder();
                 editor_->open(*model->gff().root(),[captured=std::move(captured),local=std::move(local),mod,scope](const std::string& name,std::uint16_t type) {

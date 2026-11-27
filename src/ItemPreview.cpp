@@ -30,7 +30,7 @@ ItemPreview::ItemPreview(wxWindow* parent,std::function<const neogff::GffStruct&
     game_->Bind(wxEVT_CHOICE,[this](wxCommandEvent&){clear();talkTable_.clear();});
 }
 ItemPreview::~ItemPreview() {canvas_->setDocument(nullptr);DestroyChildren();}
-void ItemPreview::setContext(const std::filesystem::path& talkTable,neomdl::model::GameVersion game) {talkTable_=talkTable;game_->SetSelection(game==neomdl::model::GameVersion::Kotor2?1:0);}
+void ItemPreview::setContext(const std::filesystem::path& talkTable,neomdl::model::GameVersion game) {clear();talkTable_=talkTable;game_->SetSelection(game==neomdl::model::GameVersion::Kotor2?1:0);}
 void ItemPreview::load() {
     wxFileDialog dialog(this,"Choose this game's dialog.tlk",neosettings::pathToWx(talkTable_.parent_path()),talkTable_.empty()?wxString("dialog.tlk"):neosettings::pathToWx(talkTable_.filename()),"Talk tables (*.tlk)|*.tlk;*.TLK",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
     if(dialog.ShowModal()!=wxID_OK)return;
@@ -64,6 +64,6 @@ void ItemPreview::update() {
 }
 void ItemPreview::error(const std::string& message) {canvas_->setDocument(nullptr);visual_.reset();modelKey_.clear();status_->SetLabel(status_->GetLabel()+" — "+wxui::toWx(message));status_->Wrap(FromDIP(480));Layout();}
 void ItemPreview::clearItem() {canvas_->setDocument(nullptr);visual_.reset();modelKey_.clear();iconKey_.clear();title_->SetLabel("Item preview");details_->Clear();icon_->SetBitmap(wxNullBitmap);status_->SetLabel("Open a UTI and load matching game data to preview it.");}
-void ItemPreview::clear() {clearItem();assets_.reset();reader_.reset();tlk_.clear();}
+void ItemPreview::clear() {clearItem();assets_.reset();reader_.reset();tlk_.clear();resolver_={};}
 std::vector<std::filesystem::path> ItemPreview::openPaths() const {std::vector<std::filesystem::path> paths;if(tlk_.loaded())paths.push_back(tlk_.filename());if(visual_) {const auto inputs=visual_->openPaths();paths.insert(paths.end(),inputs.begin(),inputs.end());}if(assets_) {const auto inputs=assets_->openPaths();paths.insert(paths.end(),inputs.begin(),inputs.end());}return paths;}
 }

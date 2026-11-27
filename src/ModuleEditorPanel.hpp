@@ -11,6 +11,7 @@ public:
     using Panel::Panel;
     virtual bool openFile(const std::filesystem::path& path,bool installed=false)=0;
     virtual bool openResource(neoshared::ResourceDocument resource,std::shared_ptr<ArchiveContext> archive={})=0;
+    virtual bool activateResource(const std::string& identity)=0;
 };
 
 ModuleEditorPanel* createModuleEditorPanel(wxWindow* parent,neomodules::Context context,GameResources games);

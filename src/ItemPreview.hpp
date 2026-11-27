@@ -15,7 +15,6 @@ public:
     ItemPreview(wxWindow*,std::function<const neogff::GffStruct&()> item,std::function<neomdl::ResourceResolver()> resources);
     ~ItemPreview() override;
     void setContext(const std::filesystem::path& talkTable,neomdl::model::GameVersion game);
-    void setTalkTable(const std::filesystem::path& path) {talkTable_=path;}
     void refreshItem();
     void clearItem();
     void clear();

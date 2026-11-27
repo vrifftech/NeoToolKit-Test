@@ -481,6 +481,17 @@ public:
         if(parentArchive_)inputs.erase(std::remove_if(inputs.begin(),inputs.end(),[this](const auto& path){return neoshared::sameResourcePath(path,parentArchive_->sourcePath);}),inputs.end());
         return inputs;
     }
+    bool activateResource(const std::string& identity) override {
+        const auto found=identityKeys_.find(identity);
+        if(found==identityKeys_.end())return false;
+        const auto& key=found->second;
+        if((key.second==kAre||key.second==kGit)&&key.first!=areaName()) {
+            areas_->SetStringSelection(wxui::toWx(key.first));
+            wxCommandEvent event(wxEVT_CHOICE,areas_->GetId());event.SetEventObject(areas_);
+            areas_->GetEventHandler()->ProcessEvent(event);
+        }
+        return fields_->activateResource(identity);
+    }
     void resourceContextChanged() override {
         if(blueprintEditor_)blueprintEditor_->applyPending();
         modFolder_=context_.captureModFolder();
@@ -516,6 +527,7 @@ public:
             auto catalog=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
             const auto extension=neomdl::resourceKey(neoshared::pathToUtf8(path.extension()));
             const bool archive=extension==".rim"||extension==".mod"||extension==".mzd";
+            workingFiles_.clear();
             if(archive) {
                 if(!catalog->openFiles(path.parent_path(),{path}))throw std::runtime_error(catalog->lastError());
                 for(const auto& entry:catalog->resources())if(editableResource(entry.type)) {
@@ -532,6 +544,8 @@ public:
                     ResourceDocument source{neomdl::resourceFileIdentity(entry.path()),
                         neoshared::pathToUtf8(entry.path().filename()),neoshared::pathToUtf8(entry.path()),*type,
                         neomdl::readResourceFile(entry.path()),{entry.path()}};
+                    source.sourcePath=entry.path();
+                    if(!installed)workingFiles_.push_back(entry.path());
                     const auto key=resourceKey(source);
                     if(installed&&modFolder_&&modFolder_->shadows(key.first,key.second,modScope))source=modFolder_->resolve(key.first,key.second,modScope).value();
                     resources.emplace(key,Resource{std::move(source),{}});
@@ -547,6 +561,7 @@ public:
             hostResources_=captureHostResources();
             install_.reset();session_.reset();previewEnabled_=false;
             installResources(std::move(resources),neoshared::pathToUtf8(path),extension==".git"||extension==".are"?neoshared::pathToUtf8(path.stem()):std::string{});
+            if(!archive)activateResource(neomdl::resourceFileIdentity(path));
             return true;
         } catch(const std::exception& e) {wxui::showError(this,e);return false;}
     }
@@ -565,19 +580,24 @@ public:
             const auto resourceName=source.fileName;sourcePath_=source.sourcePath;
             std::map<Key,Resource> resources;
             const auto key=resourceKey(source);
+            const auto identity=source.identity;
+            resources.emplace(key,Resource{std::move(source),{}});
+            if(parent)for(const auto& [memberKey,member]:*parent->members)
+                if(editableResource(member.type))resources.try_emplace(memberKey,Resource{member,{}});
+            if(!resources.count({"module",kIfo}))if(auto ifo=resolver("module",kIfo))
+                resources.emplace(Key{"module",kIfo},Resource{std::move(*ifo),{}});
             std::set<std::string> names;
-            if(source.type==kIfo) {
-                neogff::GffFile file;file.LoadBytes(source.bytes);
+            for(const auto& [resourceKey,resource]:resources)if(resourceKey.second==kAre||resourceKey.second==kGit)names.insert(resourceKey.first);
+            for(const auto& [resourceKey,resource]:resources)if(resourceKey.second==kIfo) {
+                neogff::GffFile file;file.LoadBytes(resource.source.bytes);
                 const auto& areas=static_cast<const neogff::GffList&>(*file.root()->GetFieldByLabel("Mod_Area_list"));
                 for(const auto& area:areas.allStructs())names.insert(neomdl::resourceKey(area->GetFieldByLabel("Area_Name")->GetString()));
-            } else names.insert(key.first);
-            resources.emplace(key,Resource{std::move(source),{}});
+            }
             for(const auto& name:names)for(const auto type:{kAre,kGit}) {
                 if(resources.count({name,type}))continue;
                 if(auto companion=resolver(name,type))resources.emplace(Key{name,type},Resource{std::move(*companion),{}});
             }
-            if(!resources.count({"module",kIfo}))if(auto ifo=resolver("module",kIfo))
-                resources.emplace(Key{"module",kIfo},Resource{std::move(*ifo),{}});
+            workingFiles_.clear();
             archivePath_.clear();localDirectory_.clear();catalog_=std::make_shared<neoshared::bif::LooseArchiveCatalog>();
             archiveResources_=neomdl::archiveResources(catalog_);
             parentArchive_=std::move(parent);
@@ -590,6 +610,7 @@ public:
             }
             previewEnabled_=true;
             installResources(std::move(resources),title.empty()?resourceName:title);
+            activateResource(identity);
             requestPreview();return true;
         } catch(const std::exception& e) {wxui::showError(this,e);return false;}
     }
@@ -1016,7 +1037,7 @@ private:
     std::map<std::string,Key> identityKeys_;
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path archivePath_,localDirectory_,staging_,sourcePath_;
-    std::vector<std::filesystem::path> inputs_;
+    std::vector<std::filesystem::path> inputs_,workingFiles_;
     std::vector<Placement> placements_;
     std::vector<Vec3> encounterFootprint_;
     std::map<std::string,std::string> ownerPaths_;
@@ -2636,7 +2657,11 @@ bool ModuleEditor::saveResources() {
     for(const auto& [key,source]:addedTemplates_)exports.push_back(&source);
     std::vector<std::filesystem::path> destinations;
     for(const auto* source:exports)destinations.push_back(directory/neoshared::pathFromUtf8(source->fileName));
-    validateHostOutputs(destinations,inputs_);
+    auto protectedInputs=inputs_;
+    protectedInputs.erase(std::remove_if(protectedInputs.begin(),protectedInputs.end(),[this](const auto& path){
+        return std::any_of(workingFiles_.begin(),workingFiles_.end(),[&](const auto& working){return neoshared::sameResourcePath(path,working);});
+    }),protectedInputs.end());
+    validateHostOutputs(destinations,protectedInputs);
     const bool overwrite=std::any_of(destinations.begin(),destinations.end(),[](const auto& path){return std::filesystem::exists(path);});
     if(overwrite&&wxMessageBox("Replace the existing module resources in this folder?","Save resources",wxYES_NO|wxICON_QUESTION,this)!=wxYES)return false;
     for(const auto* source:exports)writeResource(directory,*source);

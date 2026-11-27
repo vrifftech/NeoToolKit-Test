@@ -72,6 +72,7 @@ public:
         auto child=context_;child.titleChanged=[this](const wxString& title){setModuleTitle(title);if(fields_&&fields_->activeModel()==selectedModel_&&selectedKey_!=key())refresh(true);};
         child.validateOutputs=[this](const auto& paths,const auto*,const auto& inputs){validateHostOutputs(paths,inputs);};
         fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");
+        box->Add(fields_->moveDocumentTabs(this),0,wxEXPAND|wxLEFT|wxRIGHT,6);
         auto menus=fields_->takeMenus();
         for(std::size_t i=0;i<menus->GetMenuCount();++i)for(auto* item:menus->GetMenu(i)->GetMenuItems())
             if(item->GetItemLabelText()=="Save") {saveId_=item->GetId();saveItem_=item;}
@@ -81,6 +82,7 @@ public:
         Bind(wxEVT_MENU_OPEN,[this](wxMenuEvent& event){fields_->dispatch(event);});
         fields_->Bind(wxEVT_BUTTON,[this](wxCommandEvent& event){if(event.GetId()==saveId_)save();else event.Skip();});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_SELECTED,[this](wxCommandEvent&){refresh(true);});
+        fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_CHANGING,[this](wxCommandEvent&){merchant_->applyPending();});
         fields_->Bind(neogff::ui::EVT_GFF_DOCUMENT_EDITED,[this](wxCommandEvent&){refresh(false);});
         tabs_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){if(event.GetEventObject()==tabs_)merchant_->applyPending();event.Skip();});
         box->Add(tabs_,1,wxEXPAND);SetSizer(box);merchant_->Disable();
@@ -94,25 +96,34 @@ public:
         const bool ok=fields_->openResource(std::move(source));if(ok)tabs_->SetSelection(0);else stores_.erase(identity);return ok;
     }
     bool canClose() override {merchant_->applyPending();return fields_->canClose();}
+    void resourceContextChanged() override {
+        merchant_->applyPending();
+        for(auto& [identity,store]:stores_) {
+            const auto source=store.game?store.game->installation()->installPath/"chitin.key":store.source.sourcePath;
+            store.game=games_(store.source.module,source);bindResources(store);
+        }
+        refresh(true);
+    }
     std::vector<std::filesystem::path> openPaths() const override {return fields_->openPaths();}
     void setAppearance(bool dark,double scale) override {fields_->setAppearance(dark,scale);wxui::applyTheme(merchant_,dark);neoview::applyFontScale(merchant_,scale);}
 private:
     std::string key() const {
         const auto identity=fields_->activeResourceIdentity();
-        return identity.empty()?neomdl::resourceFileIdentity(fields_->activeModel()->filename()):identity;
+        return identity.empty()?neomdl::resourceFileIdentity(fields_->activeFilename()):identity;
     }
     Store& current() {return stores_.at(key());}
     Store makeStore(neoshared::ResourceDocument source,std::shared_ptr<ArchiveContext> parent={}) {
         const auto module=source.module.empty()?neoshared::bif::ModFolder::moduleName(source.sourcePath):source.module;
         auto game=parent?parent->game:games_(module,source.sourcePath);
-        const auto directory=neomdl::resourceKey(neoshared::pathToUtf8(source.sourcePath.extension()))==".utm"?source.sourcePath.parent_path():std::filesystem::path{};
+        const auto directory=(source.sourcePath.has_extension()&&neomdl::resourceKey(neoshared::pathToUtf8(source.sourcePath.extension()))==".utm")?source.sourcePath.parent_path():std::filesystem::path{};
         source.module=module;
         Store store{std::move(source),std::move(parent),std::move(game),{},directory};bindResources(store);return store;
     }
     void bindResources(Store& store) {
         auto local=store.directory.empty()?neomdl::ResourceResolver{}:neomdl::directoryResources(store.directory);
         auto game=store.game?store.game->resolver():neomdl::ResourceResolver([captured=context_.captureScopedResourceResolver(store.source.module)](const std::string& name,std::uint16_t type){return captured(name,type,{});});
-        store.resources=[parent=store.parent,game=std::move(game),local=std::move(local)](const std::string& name,std::uint16_t type) {
+        store.resources=[parent=store.parent,game=std::move(game),local=std::move(local),mod=context_.captureModFolder(),scope=store.source.module](const std::string& name,std::uint16_t type) {
+            if(mod&&mod->shadows(name,type,scope))return mod->resolve(name,type,scope,neomdl::resourceLoadJob());
             if(parent)if(auto resource=parent->resources(name,type))return resource;
             if(local)if(auto resource=local(name,type))return resource;
             return game(name,type);
@@ -126,8 +137,8 @@ private:
             selectedModel_=model;selectedKey_=identity;
             if(!stores_.count(identity)) {
                 neoshared::ResourceDocument source;source.identity=identity;source.type=2051;
-                source.sourcePath=model->filename();source.fileName=neoshared::pathToUtf8(model->filename().filename());
-                source.sourceDescription=neoshared::pathToUtf8(model->filename());stores_.emplace(identity,makeStore(std::move(source)));
+                source.sourcePath=fields_->activeFilename();source.fileName=neoshared::pathToUtf8(fields_->activeFilename().filename());
+                source.sourceDescription=neoshared::pathToUtf8(fields_->activeFilename());stores_.emplace(identity,makeStore(std::move(source)));
             }
             auto& store=current();merchant_->Enable();
             const auto title=store.parent?store.parent->label+" > "+store.source.fileName:store.source.sourceDescription;

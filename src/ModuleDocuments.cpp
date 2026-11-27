@@ -70,6 +70,10 @@ public:
         for(auto& document:documents_)if(!document.panel->canClose()) {select(document.panel);return false;}
         return true;
     }
+    bool activateResource(const std::string& identity) override {
+        for(auto& document:documents_)if(document.panel->activateResource(identity)) {select(document.panel);return true;}
+        return false;
+    }
     void setAppearance(bool dark,double scale) override {
         dark_=dark;scale_=scale;wxui::applyTheme(this,dark);
         for(auto& document:documents_)document.panel->setAppearance(dark,scale);
@@ -94,6 +98,13 @@ private:
     void select(ModuleEditorPanel* panel) {tabs_->SetSelection(tabs_->GetPageIndex(panel));syncMenus();}
     ModuleEditorPanel* addDocument(const std::string& identity,const std::string& label) {
         auto context=context_;
+        context.validateOutputs=[this](const auto& paths,const auto* owner,const auto& inputs){
+            auto protectedInputs=inputs;
+            for(const auto& document:documents_)if(document.panel!=owner) {
+                const auto open=document.panel->openPaths();protectedInputs.insert(protectedInputs.end(),open.begin(),open.end());
+            }
+            validateHostOutputs(paths,protectedInputs);
+        };
         context.titleChanged=[this,identity](const wxString& title){
             const auto found=std::find_if(documents_.begin(),documents_.end(),[&](const auto& document){return document.identity==identity;});
             if(found==documents_.end())return; // The constructor has not installed its document yet.
@@ -115,6 +126,7 @@ private:
         syncMenus();
     }
     bool open(const std::string& identity,const std::string& label,const std::function<bool(ModuleEditorPanel&)>& load) {
+        if(activateResource(identity))return true;
         for(auto& document:documents_)if(document.identity==identity) {select(document.panel);return true;}
         auto* panel=addDocument(identity,label);
         if(!load(*panel)) {removeDocument(panel);return false;}

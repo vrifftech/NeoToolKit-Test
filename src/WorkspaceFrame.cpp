@@ -253,6 +253,32 @@ bool WorkspaceFrame::gamePath(const std::filesystem::path& path) const {
 void WorkspaceFrame::buildMenus() {
     auto* bar=new wxMenuBar;
     auto* file=new wxMenu;
+    auto* create=new wxMenu;
+    const auto addNew=[this,create](const wxString& label,EditorKind kind,const wxString& command) {
+        const auto id=wxWindow::NewControlId();create->Append(id,label);
+        Bind(wxEVT_MENU,[this,kind,command](wxCommandEvent&){
+            try {
+                auto* panel=ensureEditor(kind);showEditor(kind);
+                auto* bar=GetMenuBar();
+                for(std::size_t i=0;i<attachedMenuCount_;++i) {
+                    const int id=bar->GetMenu(2+i)->FindItem(command);
+                    if(id!=wxNOT_FOUND) {wxCommandEvent event(wxEVT_MENU,id);panel->dispatch(event);return;}
+                }
+                throw std::runtime_error("The editor's New command is unavailable.");
+            } catch(const std::exception& e) {wxui::showError(this,e);}
+        },id);
+    };
+    addNew("2DA table",EditorKind::Tables,"New 2DA");
+    addNew("Soundset",EditorKind::Soundsets,"New SSF");
+    addNew("Talk table...",EditorKind::TalkTables,"New...");
+    addNew("GFF resource...",EditorKind::Gff,"New GFF...");
+    addNew("KotOR dialogue",EditorKind::Dialogues,"KotOR DLG");
+    addNew("KotOR II dialogue",EditorKind::Dialogues,"KotOR II DLG");
+    addNew("Jade Empire dialogue",EditorKind::Dialogues,"Jade Empire DLG");
+    addNew("Journal...",EditorKind::Journals,"New Journal...");
+    addNew("Archive...",EditorKind::Archives,"New");
+    addNew("GUI layout",EditorKind::Gui,"New GUI");
+    file->AppendSubMenu(create,"New");
     file->Append(ID_Open,"Open resource...\tCtrl+O");
     file->Append(ID_OpenLiveModule,"Open Live Module...");
     auto* mods=new wxMenu;mods->Append(ID_ModFolderPath,"None")->Enable(false);mods->AppendSeparator();
@@ -376,7 +402,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
     case EditorKind::Models:models_=neomdl::ui::createModelEditorPanel(editors_,context);panel=models_;break;
     case EditorKind::Modules:modules_=createModuleEditorPanel(editors_,context,games);panel=modules_;break;
     case EditorKind::Gui:guis_=neogui::ui::createEditorPanel(editors_,context);panel=guis_;break;
-    case EditorKind::Items:items_=createItemEditorPanel(editors_,context);panel=items_;break;
+    case EditorKind::Items:items_=createItemEditorPanel(editors_,context,games);panel=items_;break;
     case EditorKind::Placeables:placeables_=createObjectEditorPanel(editors_,context,2044);panel=placeables_;break;
     case EditorKind::Creatures:creatures_=createObjectEditorPanel(editors_,context,2027);panel=creatures_;break;
     case EditorKind::Stores:stores_=createStoreEditorPanel(editors_,context,games,[this](auto resource){openSnapshot(std::move(resource),{},true);});panel=stores_;break;
@@ -389,7 +415,7 @@ neomodules::Panel* WorkspaceFrame::ensureEditor(EditorKind kind) {
             return result;
         },[this](neoshared::ResourceDocument resource,const std::string& editor){
             std::shared_ptr<ArchiveContext> archive;
-            if(editor=="module"||editor=="store")archive=captureArchiveContext(resource);
+            if(editor=="module"||editor=="store"||editor=="item")archive=captureArchiveContext(resource);
             if(resource.module.empty())resource.module=neoshared::bif::ModFolder::moduleName(resource.sourcePath);
             openSnapshot(std::move(resource),editor,false,std::move(archive));
         }});
@@ -572,7 +598,7 @@ bool WorkspaceFrame::openSnapshot(neoshared::ResourceDocument resource,const std
     case EditorKind::TalkTables:ok=talkTables_->openResource(std::move(resource));break;
     case EditorKind::Gff:ok=structured_->openResource(std::move(resource));break;
     case EditorKind::Gui:ok=guis_->openResource(std::move(resource));break;
-    case EditorKind::Items:showEditor(selected);ok=items_->openResource(std::move(resource));break;
+    case EditorKind::Items:showEditor(selected);ok=items_->openResource(std::move(resource),std::move(archive));break;
     case EditorKind::Placeables:showEditor(selected);ok=placeables_->openResource(std::move(resource));break;
     case EditorKind::Creatures:showEditor(selected);ok=creatures_->openResource(std::move(resource));break;
     case EditorKind::Dialogues:ok=dialogues_->openResource(std::move(resource));break;
