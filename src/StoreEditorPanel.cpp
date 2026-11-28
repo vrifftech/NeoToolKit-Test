@@ -43,7 +43,6 @@ public:
         BlueprintPanel::Actions actions;
         actions.sourceNote="";actions.saveLabel="Save UTM";
         actions.fields=[this]{tabs_->SetSelection(1);};actions.save=[this]{save();};
-        actions.stockFields=[this](std::size_t index){tabs_->SetSelection(1);fields_->selectField("ItemList\\"+std::to_string(index));};
         actions.edit=[this](const auto& path,const auto& type,const auto& value,const auto&){editBlueprintField(*fields_->activeModel(),path,type,value);edited();};
         actions.addItem=[this](neoshared::ResourceDocument item,const neomdl::ResourceResolver&) {
             auto& root=*fields_->activeModel()->gff().root();

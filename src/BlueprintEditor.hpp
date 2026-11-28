@@ -26,7 +26,6 @@ public:
         std::function<void(const std::string&,const std::string&,const std::string&,const std::string&)> edit;
         std::function<void(neoshared::ResourceDocument,const neomdl::ResourceResolver&)> addItem;
         std::function<void(StockAction,std::size_t,bool)> stock;
-        std::function<void(std::size_t)> stockFields;
         std::function<void(const std::string&,std::uint16_t)> itemFields;
         std::function<void()> fields,save,package,undo,redo;
         std::string saveLabel="Save resources...";
@@ -67,7 +66,7 @@ private:
     ShopPreview* preview_{};
     wxPanel* previews_{};ItemPreview* itemPreview_{};
     ObjectEditor* object_{};
-    wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* stockFields_{};
+    wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};
     wxButton* save_{};wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
 };
 

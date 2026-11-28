@@ -1150,7 +1150,6 @@ void ModuleEditor::editBlueprint() {
         };
         actions.itemFields=[this](const std::string& name,std::uint16_t type){auto resolver=moduleResources();auto& resource=openBlueprintResource(resolver(name,type).value(),resolver);blueprintKey_=resourceKey(resource.source);blueprintEditor_->open(type,game_,resource.source.fileName,*resource.model->gff().root(),resolver,session_,catalog_,localDirectory_);};
         actions.fields=[this]{fields_->activateResource(resources_.at(blueprintKey_).source.identity);fields_->refreshActiveDocument();fields_->SetFocus();};
-        actions.stockFields=[this](std::size_t index){fields_->activateResource(resources_.at(blueprintKey_).source.identity);fields_->refreshActiveDocument();fields_->selectField("ItemList\\"+std::to_string(index));fields_->SetFocus();};
         actions.save=[this]{saveResources();};actions.package=[this]{packageModule(moduleName_);};actions.undo=[this]{restoreEdit(historyIndex_-1);};actions.redo=[this]{restoreEdit(historyIndex_+1);};
         blueprintEditor_=new BlueprintEditor(this,std::move(actions));
     }

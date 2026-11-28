@@ -81,7 +81,8 @@ void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver
                 row.stack=row.maximumStack;incoming.stack=total-row.maximumStack;
             } else {row.stack=total;row.sources.insert(row.sources.end(),incoming.sources.begin(),incoming.sources.end());absorbed=true;break;}
         }
-        if(!absorbed)items_.push_back(std::move(incoming));
+        // The game's non-party item repository inserts new items at the front.
+        if(!absorbed)items_.insert(items_.begin(),std::move(incoming));
     }
     std::stable_sort(items_.begin(),items_.end(),[](const auto& a,const auto& b){return a.group<b.group;});
     const auto selectedItem=std::find_if(items_.begin(),items_.end(),[&](const auto& item){return !item.plot&&std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end();});

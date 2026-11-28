@@ -37,15 +37,15 @@ BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
     if(actions_.package)command("Package MOD...",actions_.package);
     box->Add(tools,0,wxEXPAND|wxLEFT|wxRIGHT,5);
     auto* split=split_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
-    details_=new wxScrolledWindow(split);details_->SetScrollRate(FromDIP(12),FromDIP(12));auto* detailsBox=new wxBoxSizer(wxVERTICAL);details_->SetSizer(detailsBox);
+    details_=new wxScrolledWindow(split);details_->SetScrollRate(0,FromDIP(12));auto* detailsBox=new wxBoxSizer(wxVERTICAL);details_->SetSizer(detailsBox);
+    details_->Bind(wxEVT_SIZE,[this](wxSizeEvent& event){details_->SetVirtualSize(details_->GetClientSize());details_->Layout();details_->FitInside();event.Skip();});
     properties_=new wxPanel(details_);detailsBox->Add(properties_,0,wxEXPAND);
     stockPage_=new wxPanel(details_);auto* stocks=new wxBoxSizer(wxVERTICAL);
     auto* stockTitle=new wxStaticText(stockPage_,wxID_ANY,"Shop inventory");stockTitle->SetFont(stockTitle->GetFont().Bold());stocks->Add(stockTitle,0,wxALL,6);
     stockTitle->SetToolTip("Starting stock loads each row's UTI, including its initial stack size. Duplicate stock adds another copy. Trading changes the merchant's live inventory, saved in the area's GIT. Infinite belongs to this store entry.");
     stock_=new ItemListView(stockPage_,true);stock_->SetMinSize(FromDIP(wxSize(-1,180)));stocks->Add(stock_,1,wxEXPAND|wxALL,5);
-    auto* row=new wxWrapSizer(wxHORIZONTAL);add_=new wxButton(stockPage_,wxID_ANY,"Add item...");duplicate_=new wxButton(stockPage_,wxID_ANY,"Duplicate stock");remove_=new wxButton(stockPage_,wxID_ANY,"Remove");itemFields_=new wxButton(stockPage_,wxID_ANY,"Edit UTI fields");
-    stockFields_=new wxButton(stockPage_,wxID_ANY,"Edit stock fields");
-    for(auto* b:{add_,duplicate_,remove_,itemFields_,stockFields_})row->Add(b,0,wxALL,3);
+    auto* row=new wxWrapSizer(wxHORIZONTAL,wxREMOVE_LEADING_SPACES);add_=new wxButton(stockPage_,wxID_ANY,"Add item...");duplicate_=new wxButton(stockPage_,wxID_ANY,"Duplicate stock");remove_=new wxButton(stockPage_,wxID_ANY,"Remove");itemFields_=new wxButton(stockPage_,wxID_ANY,"Edit UTI fields");
+    for(auto* b:{add_,duplicate_,remove_,itemFields_})row->Add(b,0,wxALL,3);
     stocks->Add(row,0,wxEXPAND|wxALL,2);
     infinite_=new wxCheckBox(stockPage_,wxID_ANY,"Infinite stock for selected entry");stocks->Add(infinite_,0,wxALL,6);stockPage_->SetSizer(stocks);detailsBox->Add(stockPage_,1,wxEXPAND|wxTOP,6);
     add_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {addItem();}catch(const std::exception& e){wxui::showError(this,e);}});
@@ -55,7 +55,6 @@ BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
     stock_->Bind(wxEVT_LIST_ITEM_SELECTED,[this](wxListEvent& e){selectStock(int(e.GetIndex()));});
     stock_->Bind(wxEVT_LIST_ITEM_DESELECTED,[this](wxListEvent&){selectStock(-1);});
     itemFields_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {const auto i=stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);actions_.itemFields(inventory(*root_)->GetStruct(std::size_t(i))->GetFieldByLabel("InventoryRes")->GetString(),2025);}catch(const std::exception& e){wxui::showError(this,e);}});
-    stockFields_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {if(applyPending())actions_.stockFields(std::size_t(stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED)));}catch(const std::exception& e){wxui::showError(this,e);}});
     previews_=new wxPanel(split);auto* previewsBox=new wxBoxSizer(wxVERTICAL);previews_->SetSizer(previewsBox);
     previewPage_=new wxPanel(previews_);auto* previewBox=new wxBoxSizer(wxVERTICAL);
     preview_=new ShopPreview(previewPage_,[this](std::size_t i){stock_->SetItemState(long(i),wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);stock_->EnsureVisible(long(i));});previewBox->Add(preview_,1,wxEXPAND|wxALL,4);
@@ -187,7 +186,7 @@ bool BlueprintPanel::commit(std::size_t index) {
     } catch(const std::exception& e){wxui::showError(this,e);return false;}
 }
 void BlueprintPanel::selectStock(int index) {
-    const bool selected=index>=0;duplicate_->Enable(selected);remove_->Enable(selected);stockFields_->Enable(selected);infinite_->Enable(selected);
+    const bool selected=index>=0;duplicate_->Enable(selected);remove_->Enable(selected);infinite_->Enable(selected);
     const auto* item=selected?inventory(*root_)->GetStruct(index):nullptr;const auto* ref=item?item->GetFieldByLabel("InventoryRes"):nullptr;itemFields_->Enable(ref&&!ref->GetString().empty());
     const auto* flag=item?static_cast<const neogff::GffByteField*>(item->GetFieldByLabel("Infinite")):nullptr;infinite_->SetValue(flag&&flag->value);
     stock_->SetToolTip(ref?wxui::toWx(stock_->itemDetails(ref->GetString(),flag&&flag->value)):wxString{});
@@ -223,7 +222,6 @@ void BlueprintPanel::selectInventory(std::size_t index) {stock_->SetItemState(lo
 BlueprintEditor::BlueprintEditor(wxWindow* parent,Actions actions)
     :wxDialog(parent,wxID_ANY,"Blueprint",wxDefaultPosition,parent->FromDIP(wxSize(1120,720)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER) {
     auto fields=std::move(actions.fields);actions.fields=[this,fields=std::move(fields)]{Hide();fields();};
-    auto stockFields=std::move(actions.stockFields);actions.stockFields=[this,stockFields=std::move(stockFields)](std::size_t index){Hide();stockFields(index);};
     panel_=new BlueprintPanel(this,std::move(actions));auto* box=new wxBoxSizer(wxVERTICAL);box->Add(panel_,1,wxEXPAND);SetSizer(box);
     Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& event){if(applyPending())Hide();event.Veto();});
 }
