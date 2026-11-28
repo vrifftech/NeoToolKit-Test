@@ -14,9 +14,10 @@ class wxTextCtrl;
 class wxStaticText;
 class wxScrolledWindow;
 class wxSplitterWindow;
-class wxNotebook;
 
 namespace neotoolkit {
+
+class ItemListView;
 
 class BlueprintPanel final : public wxPanel {
 public:
@@ -59,9 +60,10 @@ private:
     std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog_;
     std::filesystem::path directory_;
     wxStaticText* source_{};wxStaticText* previewStatus_{};
-    wxScrolledWindow* properties_{};
+    wxScrolledWindow* details_{};
+    wxPanel* properties_{};
     wxPanel* stockPage_{};wxPanel* previewPage_{};
-    wxListCtrl* stock_{};wxCheckBox* infinite_{};
+    ItemListView* stock_{};wxCheckBox* infinite_{};
     ShopPreview* preview_{};
     wxPanel* previews_{};ItemPreview* itemPreview_{};
     ObjectEditor* object_{};

@@ -23,7 +23,7 @@ public:
         });
         tabs_->AddPage(editor_,type_==2027?"Creature":"Placeable",true);
         auto child=context_;child.validateOutputs=[this](const auto& paths,const auto*,const auto& inputs){validateHostOutputs(paths,inputs);};
-        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");
+        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"View GFF");
         box->Insert(0,fields_->moveDocumentTabs(this),0,wxEXPAND|wxLEFT|wxRIGHT,6);box->Add(tabs_,1,wxEXPAND);SetSizer(box);
         setModuleMenus(fields_->takeMenus().release());
         Bind(wxEVT_MENU,[this](wxCommandEvent& event){if(!editor_->applyPending())return;fields_->dispatch(event);refresh();});

@@ -1,4 +1,5 @@
 #include "ObjectPalette.hpp"
+#include "ItemListView.hpp"
 #include "NeoWxUi.hpp"
 #include <gff/Common.hpp>
 #include <wx/choice.h>
@@ -10,6 +11,7 @@
 #include <wx/textctrl.h>
 #include <wx/tglbtn.h>
 #include <wx/sizer.h>
+#include <wx/splitter.h>
 #include <algorithm>
 #include <map>
 
@@ -47,13 +49,21 @@ ObjectPalette::ObjectPalette(wxWindow* parent,bool inventory):wxPanel(parent),in
     for(const auto& kind:kObjectKinds)kind_->Append(kind.label);
     kind_->SetSelection(0);box->Add(kind_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
     kind_->Show(!inventory_);
-    search_=new wxSearchCtrl(this,wxID_ANY);search_->SetDescriptiveText("Search template or source...");
+    search_=new wxSearchCtrl(this,wxID_ANY);search_->SetDescriptiveText(inventory_?"Search item name, template or source...":"Search template or source...");
     box->Add(search_,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,5);
-    entries_=new wxListCtrl(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxLC_REPORT|wxLC_SINGLE_SEL);
-    entries_->AppendColumn("Template",wxLIST_FORMAT_LEFT,FromDIP(145));
-    entries_->AppendColumn("Type",wxLIST_FORMAT_LEFT,FromDIP(90));
-    entries_->AppendColumn("Source",wxLIST_FORMAT_LEFT,FromDIP(250));
-    box->Add(entries_,1,wxEXPAND|wxLEFT|wxRIGHT,5);
+    if(inventory_) {
+        auto* split=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
+        entries_=itemList_=new ItemListView(split,false);
+        itemDetails_=new wxTextCtrl(split,wxID_ANY,"Select an item to see its description and properties.",wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE|wxTE_READONLY);
+        split->SetMinimumPaneSize(FromDIP(200));split->SplitVertically(entries_,itemDetails_,FromDIP(510));split->SetSashGravity(0.0);
+        box->Add(split,1,wxEXPAND|wxLEFT|wxRIGHT,5);
+    } else {
+        entries_=new wxListCtrl(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxLC_REPORT|wxLC_SINGLE_SEL);
+        entries_->AppendColumn("Template",wxLIST_FORMAT_LEFT,FromDIP(145));
+        entries_->AppendColumn("Type",wxLIST_FORMAT_LEFT,FromDIP(90));
+        entries_->AppendColumn("Source",wxLIST_FORMAT_LEFT,FromDIP(250));
+        box->Add(entries_,1,wxEXPAND|wxLEFT|wxRIGHT,5);
+    }
     summary_=new wxStaticText(this,wxID_ANY,"Choose Game resources to browse templates.");
     box->Add(summary_,0,wxEXPAND|wxALL,5);
     auto* placement=new wxPanel(this);auto* placementBox=new wxBoxSizer(wxVERTICAL);
@@ -138,7 +148,10 @@ void ObjectPalette::rebuild() {
     if(auto mod=selected_->modFolder())for(const auto* entry:mod->resources(selected_->moduleScope()?selected_->moduleScope()->name:std::string{}))
         if(std::find(types.begin(),types.end(),entry->type)!=types.end())entries.insert_or_assign({neomdl::resourceKey(entry->resref),entry->type},neomdl::GameResourceEntry{entry->resref,entry->type,"Mod folder: "+neoshared::pathToUtf8(mod->root())});
     for(auto& entry:selected_->resources(types))entries.emplace(std::make_pair(entry.resref,entry.type),std::move(entry));
-    blueprints_.clear();for(auto& [key,entry]:entries)blueprints_.push_back(std::move(entry));filter();
+    blueprints_.clear();for(auto& [key,entry]:entries)blueprints_.push_back(std::move(entry));
+    if(inventory_)itemList_->setResources(selectedResources(),neoshared::game::findExistingPathCaseInsensitive(selected_->installation()->installPath/"dialog.tlk"),
+        selected_->installation()->id=="kotor2"?neomdl::model::GameVersion::Kotor2:neomdl::model::GameVersion::Kotor1);
+    filter();
 }
 void ObjectPalette::filter() {
     stopPlacing();entries_->Freeze();entries_->DeleteAllItems();
@@ -146,16 +159,24 @@ void ObjectPalette::filter() {
     for(std::size_t i=0;i<blueprints_.size();++i) {
         const auto& entry=blueprints_[i];
         if(kind>0&&entry.type!=kObjectKinds.at(kind-1).type)continue;
-        if(!term.empty()&&!wxui::toWx(entry.resref+"."+neomdl::resourceExtension(entry.type)+" "+kindFor(entry.type).label+" "+entry.source).Lower().Contains(term))continue;
-        const auto row=entries_->InsertItem(entries_->GetItemCount(),wxui::toWx(entry.resref));
-        entries_->SetItem(row,1,kindFor(entry.type).label);entries_->SetItem(row,2,wxui::toWx(entry.source));
+        const auto name=inventory_?itemList_->itemName(entry.resref):std::string{};
+        if(!term.empty()&&!wxui::toWx(name+" "+entry.resref+"."+neomdl::resourceExtension(entry.type)+" "+kindFor(entry.type).label+" "+entry.source).Lower().Contains(term))continue;
+        const auto row=inventory_?itemList_->appendItem(entry.resref):entries_->InsertItem(entries_->GetItemCount(),wxui::toWx(entry.resref));
+        if(!inventory_) {entries_->SetItem(row,1,kindFor(entry.type).label);entries_->SetItem(row,2,wxui::toWx(entry.source));}
         entries_->SetItemData(row,i);
     }
-    entries_->Thaw();summary_->SetLabel(wxString::Format("%ld templates",entries_->GetItemCount()));
+    entries_->Thaw();summary_->SetLabel(wxui::toWx(std::string(inventory_?"Items: ":"Templates: ")+std::to_string(entries_->GetItemCount())));
     setPlacementEnabled(placementEnabled_);
     selectionChanged();
 }
-void ObjectPalette::selectionChanged() {wxCommandEvent event(EVT_BLUEPRINT_SELECTION_CHANGED,GetId());event.SetEventObject(this);ProcessWindowEvent(event);}
+void ObjectPalette::selectionChanged() {
+    if(inventory_) {
+        const auto row=entries_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+        if(row==-1)itemDetails_->ChangeValue("Select an item to see its description and properties.");
+        else {const auto& entry=blueprints_.at(entries_->GetItemData(row));itemDetails_->ChangeValue(wxui::toWx(itemList_->itemDetails(entry.resref)+"\n\nSource: "+entry.source));}
+    }
+    wxCommandEvent event(EVT_BLUEPRINT_SELECTION_CHANGED,GetId());event.SetEventObject(this);ProcessWindowEvent(event);
+}
 neomdl::ResourceResolver ObjectPalette::selectedResources() const {
     auto resolve=selected_->resolver();
     if(scope_->GetSelection()!=0)return resolve;

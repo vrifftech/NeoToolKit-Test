@@ -70,10 +70,10 @@ public:
             if(!source)throw std::runtime_error("Cannot find item template "+name+".uti in this store's resources.");
             open(std::move(*source),current().parent);
         };
-        merchant_=new BlueprintPanel(tabs_,std::move(actions));tabs_->AddPage(merchant_,"Merchant / shop preview");
+        merchant_=new BlueprintPanel(tabs_,std::move(actions));tabs_->AddPage(merchant_,"Merchant");
         auto child=context_;child.titleChanged=[this](const wxString& title){setModuleTitle(title);if(fields_&&fields_->activeModel()==selectedModel_&&selectedKey_!=key())refresh(true);};
         child.validateOutputs=[this](const auto& paths,const auto*,const auto& inputs){validateHostOutputs(paths,inputs);};
-        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"All fields");
+        fields_=neogff::ui::createEditorPanel(tabs_,std::move(child));tabs_->AddPage(fields_,"View GFF");
         box->Add(fields_->moveDocumentTabs(this),0,wxEXPAND|wxLEFT|wxRIGHT,6);
         auto menus=fields_->takeMenus();
         for(std::size_t i=0;i<menus->GetMenuCount();++i)for(auto* item:menus->GetMenu(i)->GetMenuItems())

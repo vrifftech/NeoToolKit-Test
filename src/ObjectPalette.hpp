@@ -16,6 +16,8 @@ class wxButton;
 
 namespace neotoolkit {
 
+class ItemListView;
+
 struct ObjectKind {
     std::uint16_t type;
     const char* label;
@@ -70,6 +72,7 @@ private:
     void selectionChanged();
     wxChoice* scope_{};wxChoice* kind_{};wxChoice* surface_{};
     wxListCtrl* entries_{};wxSearchCtrl* search_{};wxToggleButton* place_{};
+    ItemListView* itemList_{};wxTextCtrl* itemDetails_{};
     wxTextCtrl* heading_{};wxTextCtrl* height_{};wxTextCtrl* triggerSize_{};
     wxStaticText* heightLabel_{};wxStaticText* summary_{};
     wxButton* draw_{};

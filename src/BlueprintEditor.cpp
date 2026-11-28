@@ -1,11 +1,11 @@
 #include <gff/GffText.hpp>
 #include "BlueprintEditor.hpp"
+#include "ItemListView.hpp"
 #include "NeoWxUi.hpp"
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/listctrl.h>
-#include <wx/notebook.h>
 #include <wx/scrolwin.h>
 #include <wx/sizer.h>
 #include <wx/splitter.h>
@@ -30,22 +30,24 @@ BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
         button->Bind(wxEVT_BUTTON,[this,action=std::move(action)](wxCommandEvent&){try {if(applyPending())action();}catch(const std::exception& e){wxui::showError(this,e);}});
         return button;
     };
-    command("All fields",actions_.fields);
+    command("View GFF",actions_.fields);
     undo_=command("Undo",actions_.undo);redo_=command("Redo",actions_.redo);
     undo_->Show(bool(actions_.undo));redo_->Show(bool(actions_.redo));
     save_=command(actions_.saveLabel.c_str(),actions_.save);
     if(actions_.package)command("Package MOD...",actions_.package);
     box->Add(tools,0,wxEXPAND|wxLEFT|wxRIGHT,5);
-    auto* split=split_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);auto* tabs=new wxNotebook(split,wxID_ANY);
-    properties_=new wxScrolledWindow(tabs);properties_->SetScrollRate(0,FromDIP(12));tabs->AddPage(properties_,"Properties / scripts");
-    stockPage_=new wxPanel(tabs);auto* stocks=new wxBoxSizer(wxVERTICAL);
-    auto* note=new wxStaticText(stockPage_,wxID_ANY,"Starting stock loads each row's UTI, including its initial stack size. Duplicate stock adds another copy. Trading changes the merchant's live inventory, saved in the area's GIT. Infinite belongs to this store entry.");note->Wrap(FromDIP(300));stocks->Add(note,0,wxEXPAND|wxALL,6);
-    stock_=new wxListCtrl(stockPage_,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxLC_REPORT|wxLC_SINGLE_SEL);stock_->AppendColumn("Item template",wxLIST_FORMAT_LEFT,FromDIP(180));stock_->AppendColumn("Infinite",wxLIST_FORMAT_LEFT,FromDIP(70));stocks->Add(stock_,1,wxEXPAND|wxALL,5);
+    auto* split=split_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
+    details_=new wxScrolledWindow(split);details_->SetScrollRate(FromDIP(12),FromDIP(12));auto* detailsBox=new wxBoxSizer(wxVERTICAL);details_->SetSizer(detailsBox);
+    properties_=new wxPanel(details_);detailsBox->Add(properties_,0,wxEXPAND);
+    stockPage_=new wxPanel(details_);auto* stocks=new wxBoxSizer(wxVERTICAL);
+    auto* stockTitle=new wxStaticText(stockPage_,wxID_ANY,"Shop inventory");stockTitle->SetFont(stockTitle->GetFont().Bold());stocks->Add(stockTitle,0,wxALL,6);
+    stockTitle->SetToolTip("Starting stock loads each row's UTI, including its initial stack size. Duplicate stock adds another copy. Trading changes the merchant's live inventory, saved in the area's GIT. Infinite belongs to this store entry.");
+    stock_=new ItemListView(stockPage_,true);stock_->SetMinSize(FromDIP(wxSize(-1,180)));stocks->Add(stock_,1,wxEXPAND|wxALL,5);
     auto* row=new wxWrapSizer(wxHORIZONTAL);add_=new wxButton(stockPage_,wxID_ANY,"Add item...");duplicate_=new wxButton(stockPage_,wxID_ANY,"Duplicate stock");remove_=new wxButton(stockPage_,wxID_ANY,"Remove");itemFields_=new wxButton(stockPage_,wxID_ANY,"Edit UTI fields");
     stockFields_=new wxButton(stockPage_,wxID_ANY,"Edit stock fields");
     for(auto* b:{add_,duplicate_,remove_,itemFields_,stockFields_})row->Add(b,0,wxALL,3);
     stocks->Add(row,0,wxEXPAND|wxALL,2);
-    infinite_=new wxCheckBox(stockPage_,wxID_ANY,"Infinite stock for selected entry");stocks->Add(infinite_,0,wxALL,6);stockPage_->SetSizer(stocks);tabs->AddPage(stockPage_,"Shop inventory");
+    infinite_=new wxCheckBox(stockPage_,wxID_ANY,"Infinite stock for selected entry");stocks->Add(infinite_,0,wxALL,6);stockPage_->SetSizer(stocks);detailsBox->Add(stockPage_,1,wxEXPAND|wxTOP,6);
     add_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){try {addItem();}catch(const std::exception& e){wxui::showError(this,e);}});
     const auto action=[this](StockAction command,bool value){try {const auto i=stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);actions_.stock(command,std::size_t(i),value);}catch(const std::exception& e){wxui::showError(this,e);}};
     duplicate_->Bind(wxEVT_BUTTON,[action](wxCommandEvent&){action(StockAction::Duplicate,false);});remove_->Bind(wxEVT_BUTTON,[action](wxCommandEvent&){action(StockAction::Remove,false);});
@@ -66,26 +68,36 @@ BlueprintPanel::BlueprintPanel(wxWindow* parent,Actions actions)
     previewStatus_=new wxStaticText(previewPage_,wxID_ANY,"Choose Game resources to load the shop's GUI, textures and font atlas.");previewStatus_->Wrap(FromDIP(600));previewBox->Add(previewStatus_,0,wxEXPAND|wxALL,6);
     previewPage_->SetSizer(previewBox);previewsBox->Add(previewPage_,1,wxEXPAND);
     itemPreview_=new ItemPreview(previews_,[this]()->const auto&{return *root_;},[this]{return resolver_;});previewsBox->Add(itemPreview_,1,wxEXPAND);
-    split->SetMinimumPaneSize(FromDIP(300));split->SplitVertically(tabs,previews_,FromDIP(360));split->SetSashGravity(0.3);box->Add(split,1,wxEXPAND|wxALL,4);SetSizer(box);
+    split->SetMinimumPaneSize(FromDIP(300));split->SplitVertically(details_,previews_,FromDIP(400));split->SetSashGravity(0.0);box->Add(split,1,wxEXPAND|wxALL,4);SetSizer(box);
 }
 
 void BlueprintPanel::buildProperties(std::uint16_t type) {
     for(auto& r:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(r.control))text->DiscardEdits();
     rows_.clear();properties_->DestroyChildren();
     auto* box=new wxBoxSizer(wxVERTICAL);properties_->SetSizer(box);
+    wxFlexGridSizer* grid=nullptr;
+    if(type==2051) {
+        auto* title=new wxStaticText(properties_,wxID_ANY,"Properties / scripts");title->SetFont(title->GetFont().Bold());box->Add(title,0,wxALL,6);
+        grid=new wxFlexGridSizer(2,FromDIP(6),FromDIP(8));grid->AddGrowableCol(1);box->Add(grid,0,wxEXPAND|wxALL,6);
+    }
     const auto add=[&](std::string field,std::string label,Kind kind=Kind::Value,std::string fieldType={},std::string defaultValue={}) {
         const auto index=rows_.size();field=field.substr(0,16);wxWindow* control;
         if(kind==Kind::Flag) {auto* check=new wxCheckBox(properties_,wxID_ANY,wxui::toWx(label));control=check;box->Add(check,0,wxEXPAND|wxALL,5);check->Bind(wxEVT_CHECKBOX,[this,index](wxCommandEvent&){commit(index);});}
-        else {box->Add(new wxStaticText(properties_,wxID_ANY,wxui::toWx(label)),0,wxLEFT|wxRIGHT|wxTOP,5);
+        else {auto* caption=new wxStaticText(properties_,wxID_ANY,wxui::toWx(label));
+            if(grid)grid->Add(caption,0,wxALIGN_CENTER_VERTICAL);else box->Add(caption,0,wxLEFT|wxRIGHT|wxTOP,5);
             if(kind==Kind::StoreMode) {auto* choice=new wxChoice(properties_,wxID_ANY);for(const auto* mode:{"Player buys only","Player sells only","Buy and sell"})choice->Append(mode);control=choice;choice->Bind(wxEVT_CHOICE,[this,index](wxCommandEvent&){commit(index);});}
             else {auto* text=new wxTextCtrl(properties_,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxTE_PROCESS_ENTER);control=text;text->Bind(wxEVT_TEXT_ENTER,[this,index](wxCommandEvent&){commit(index);});text->Bind(wxEVT_KILL_FOCUS,[this,index,text](wxFocusEvent& e){if(text->IsModified())commit(index);e.Skip();});}
-            box->Add(control,0,wxEXPAND|wxALL,5);
+            if(grid) {
+                const bool number=kind==Kind::LocalizedRef||fieldType=="INT";
+                control->SetMinSize(FromDIP(wxSize(number?100:220,-1)));grid->Add(control,0,number?0:wxEXPAND);
+            } else box->Add(control,0,wxEXPAND|wxALL,5);
         }
         rows_.push_back({std::move(field),std::move(label),kind,control,std::move(fieldType),std::move(defaultValue)});
         if(rows_.back().field=="MarkUp"||rows_.back().field=="MarkDown")control->SetToolTip("Percentage of item cost: 100 means the item cost before trading modifiers.");
+        if(kind==Kind::LocalizedRef)control->SetToolTip("dialog.tlk string reference; -1 means no reference.");
         if(rows_.back().field=="Plot"&&(type==2042))control->SetToolTip("Invulnerable takes precedence over Plot when both fields exist. Static objects are always treated as plot.");
     };
-    const auto loc=[&](const std::string& field,const std::string& label){const auto* fieldType=type==2051?"CExoLocString":"";add(field,label+" — embedded English",Kind::LocalizedText,fieldType);add(field,label+" — TLK reference (-1 = none)",Kind::LocalizedRef,fieldType);};
+    const auto loc=[&](const std::string& field,const std::string& label){const auto* fieldType=type==2051?"CExoLocString":"";add(field,label+(type==2051?" (English)":" — embedded English"),Kind::LocalizedText,fieldType);add(field,label+(type==2051?" StrRef":" — TLK reference (-1 = none)"),Kind::LocalizedRef,fieldType);};
     add("Tag","Tag",Kind::Value,type==2051?"CExoString":"");
     if(type==2032||type==2025)loc("LocalizedName","Name");
     else if(type==2042||type==2051)loc("LocName","Name");
@@ -110,7 +122,8 @@ void BlueprintPanel::buildProperties(std::uint16_t type) {
     if(type==2032)scripts={"ScriptHeartbeat","ScriptOnEnter","ScriptOnExit","ScriptUserDefine","OnTrapTriggered","OnDisarm","OnClick"};
     if(type==2051)scripts={"OnOpenStore"};
     for(const auto& name:scripts)add(name,name,Kind::Value,type==2051?"CResRef":"");
-    auto* note=new wxStaticText(properties_,wxID_ANY,type==2051?"Missing merchant fields show the game defaults and are created when edited. Other translations are available through All fields.":"Only fields present in the template are enabled. Other fields and translations are available through All fields.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);properties_->FitInside();
+    if(type!=2051) {auto* note=new wxStaticText(properties_,wxID_ANY,"Only fields present in the template are enabled. Other fields and translations are available through View GFF.");note->Wrap(FromDIP(300));box->Add(note,0,wxEXPAND|wxALL,6);}
+    properties_->Layout();
 }
 void BlueprintPanel::open(std::uint16_t type,neomdl::model::GameVersion game,const std::string& title,const neogff::GffStruct& root,neomdl::ResourceResolver resolver,std::shared_ptr<neomdl::GameResourceSession> session,std::shared_ptr<neoshared::bif::LooseArchiveCatalog> catalog,const std::filesystem::path& directory) {
     if(type_!=type||game_!=game) {if(type!=2044&&type!=2027)buildProperties(type);preview_->clear();itemPreview_->clear();type_=type;game_=game;}
@@ -124,9 +137,11 @@ void BlueprintPanel::open(std::uint16_t type,neomdl::model::GameVersion game,con
         }
         object_->Show();object_->Enable();object_->open(root,resolver,game);
     } else if(object_) {object_->clear();object_->Hide();}
-    const bool store=type==2051,item=type==2025;stockPage_->Enable(store);previewPage_->Show(store);itemPreview_->Show(item);
+    const bool store=type==2051,item=type==2025;stockPage_->Show(store);previewPage_->Show(store);itemPreview_->Show(item);
+    if(store)stock_->setResources(resolver,session_?neoshared::game::findExistingPathCaseInsensitive(session_->installation()->installPath/"dialog.tlk"):std::filesystem::path{},game);
     if(!store&&!item&&split_->IsSplit())split_->Unsplit(previews_);
-    if((store||item)&&!split_->IsSplit()) {previews_->Show();split_->SplitVertically(split_->GetWindow1(),previews_,FromDIP(360));}
+    if((store||item)&&!split_->IsSplit()) {previews_->Show();split_->SplitVertically(details_,previews_,FromDIP(400));}
+    details_->Layout();details_->FitInside();
     itemPreview_->setContext(session_?session_->installation()->installPath/"dialog.tlk":std::filesystem::path{},game);
     add_->Enable(bool(session_));
     refresh(root,std::move(resolver));if(store&&session_)loadPreview();previews_->Layout();Layout();Show();Raise();
@@ -151,8 +166,8 @@ void BlueprintPanel::refresh(const neogff::GffStruct& root,neomdl::ResourceResol
             text->ChangeValue(wxui::toWx(value));text->DiscardEdits();
         }
     }
-    const auto selected=stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);stock_->DeleteAllItems();
-    if(type_==2051)if(const auto* list=inventory(root))for(std::size_t i=0;i<list->count();++i) {const auto& item=*list->GetStruct(i);const auto* ref=item.GetFieldByLabel("InventoryRes");const auto index=stock_->InsertItem(long(i),wxui::toWx(ref?ref->GetString():"(missing InventoryRes)"));const auto* flag=static_cast<const neogff::GffByteField*>(item.GetFieldByLabel("Infinite"));stock_->SetItem(index,1,flag&&flag->value?"Yes":"No");}
+    const auto selected=stock_->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);stock_->clearItems();
+    if(type_==2051)if(const auto* list=inventory(root))for(std::size_t i=0;i<list->count();++i) {const auto& item=*list->GetStruct(i);const auto* ref=item.GetFieldByLabel("InventoryRes");const auto* flag=static_cast<const neogff::GffByteField*>(item.GetFieldByLabel("Infinite"));stock_->appendItem(ref?ref->GetString():"(missing InventoryRes)",flag&&flag->value);}
     if(selected>=0&&selected<stock_->GetItemCount())stock_->SetItemState(selected,wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);
     selectStock(selected<stock_->GetItemCount()?int(selected):-1);
     if(type_==2051)try {preview_->setStore(root,resolver_,int(selected));}catch(const std::exception& e){preview_->clear();previewStatus_->SetLabel(wxui::toWx(e.what()));previewStatus_->Show();previewPage_->Layout();}
@@ -175,10 +190,11 @@ void BlueprintPanel::selectStock(int index) {
     const bool selected=index>=0;duplicate_->Enable(selected);remove_->Enable(selected);stockFields_->Enable(selected);infinite_->Enable(selected);
     const auto* item=selected?inventory(*root_)->GetStruct(index):nullptr;const auto* ref=item?item->GetFieldByLabel("InventoryRes"):nullptr;itemFields_->Enable(ref&&!ref->GetString().empty());
     const auto* flag=item?static_cast<const neogff::GffByteField*>(item->GetFieldByLabel("Infinite")):nullptr;infinite_->SetValue(flag&&flag->value);
+    stock_->SetToolTip(ref?wxui::toWx(stock_->itemDetails(ref->GetString(),flag&&flag->value)):wxString{});
     preview_->selectInventory(index);
 }
 void BlueprintPanel::addItem() {
-    wxDialog dialog(this,wxID_ANY,"Add shop inventory item",wxDefaultPosition,FromDIP(wxSize(760,570)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* box=new wxBoxSizer(wxVERTICAL);
+    wxDialog dialog(this,wxID_ANY,"Add shop inventory item",wxDefaultPosition,FromDIP(wxSize(960,640)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);auto* box=new wxBoxSizer(wxVERTICAL);
     auto* picker=new ObjectPalette(&dialog,true);picker->setResources(session_,catalog_,directory_);box->Add(picker,1,wxEXPAND|wxALL,6);box->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALIGN_RIGHT|wxALL,6);dialog.SetSizer(box);
     auto* ok=static_cast<wxButton*>(dialog.FindWindow(wxID_OK));ok->SetLabel("Add item");ok->Disable();picker->Bind(EVT_BLUEPRINT_SELECTION_CHANGED,[ok,picker](wxCommandEvent&){ok->Enable(picker->selectedType()==2025);});
     if(dialog.ShowModal()==wxID_OK)actions_.addItem(picker->selectedBlueprint(),picker->selectedResources());
