@@ -41,6 +41,7 @@ public:
     void setSaveLabel(const std::string& label);
     void setHistory(bool undo,bool redo);
     void selectInventory(std::size_t index);
+    std::vector<std::filesystem::path> previewPaths() const {return itemPreview_->openPaths();}
 private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
     struct Row {std::string field,label;Kind kind;wxWindow* control;std::string fieldType,defaultValue;};

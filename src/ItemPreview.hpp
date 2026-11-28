@@ -20,7 +20,6 @@ public:
     void clear();
     std::vector<std::filesystem::path> openPaths() const;
 private:
-    void load();
     void update();
     void error(const std::string&);
     std::function<const neogff::GffStruct&()> item_;
@@ -32,7 +31,8 @@ private:
     std::shared_ptr<neomdl::ModelDocument> visual_;
     std::filesystem::path talkTable_;
     std::string modelKey_,iconKey_;
-    wxChoice* game_{};wxChoice* modelMode_{};
+    neomdl::model::GameVersion game_{};
+    wxChoice* modelMode_{};
     wxStaticBitmap* icon_{};wxStaticText* title_{};wxStaticText* status_{};
     wxTextCtrl* details_{};
     neomdl::ui::ModelCanvas* canvas_{};
