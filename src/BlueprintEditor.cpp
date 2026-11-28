@@ -74,7 +74,7 @@ void BlueprintPanel::buildProperties(std::uint16_t type) {
     for(auto& r:rows_)if(auto* text=dynamic_cast<wxTextCtrl*>(r.control))text->DiscardEdits();
     rows_.clear();properties_->DestroyChildren();
     auto* box=new wxBoxSizer(wxVERTICAL);properties_->SetSizer(box);
-    wxFlexGridSizer* grid=nullptr;
+    wxFlexGridSizer* grid=nullptr;wxWrapSizer* prices=nullptr;
     if(type==2051) {
         auto* title=new wxStaticText(properties_,wxID_ANY,"Properties / scripts");title->SetFont(title->GetFont().Bold());box->Add(title,0,wxALL,6);
         grid=new wxFlexGridSizer(2,FromDIP(6),FromDIP(8));grid->AddGrowableCol(1);box->Add(grid,0,wxEXPAND|wxALL,6);
@@ -83,12 +83,16 @@ void BlueprintPanel::buildProperties(std::uint16_t type) {
         const auto index=rows_.size();field=field.substr(0,16);wxWindow* control;
         if(kind==Kind::Flag) {auto* check=new wxCheckBox(properties_,wxID_ANY,wxui::toWx(label));control=check;box->Add(check,0,wxEXPAND|wxALL,5);check->Bind(wxEVT_CHECKBOX,[this,index](wxCommandEvent&){commit(index);});}
         else {auto* caption=new wxStaticText(properties_,wxID_ANY,wxui::toWx(label));
-            if(grid)grid->Add(caption,0,wxALIGN_CENTER_VERTICAL);else box->Add(caption,0,wxLEFT|wxRIGHT|wxTOP,5);
+            auto* pair=prices?new wxBoxSizer(wxHORIZONTAL):nullptr;
+            if(pair) {pair->Add(caption,0,wxALIGN_CENTER_VERTICAL|wxRIGHT,FromDIP(4));prices->Add(pair,0,wxRIGHT,FromDIP(10));}
+            else if(grid)grid->Add(caption,0,wxALIGN_CENTER_VERTICAL);else box->Add(caption,0,wxLEFT|wxRIGHT|wxTOP,5);
             if(kind==Kind::StoreMode) {auto* choice=new wxChoice(properties_,wxID_ANY);for(const auto* mode:{"Player buys only","Player sells only","Buy and sell"})choice->Append(mode);control=choice;choice->Bind(wxEVT_CHOICE,[this,index](wxCommandEvent&){commit(index);});}
             else {auto* text=new wxTextCtrl(properties_,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxTE_PROCESS_ENTER);control=text;text->Bind(wxEVT_TEXT_ENTER,[this,index](wxCommandEvent&){commit(index);});text->Bind(wxEVT_KILL_FOCUS,[this,index,text](wxFocusEvent& e){if(text->IsModified())commit(index);e.Skip();});}
-            if(grid) {
+            if(pair) {control->SetMinSize(FromDIP(wxSize(60,-1)));pair->Add(control);}
+            else if(grid) {
                 const bool number=kind==Kind::LocalizedRef||fieldType=="INT";
-                control->SetMinSize(FromDIP(wxSize(number?100:220,-1)));grid->Add(control,0,number?0:wxEXPAND);
+                if(kind!=Kind::StoreMode)control->SetMinSize(FromDIP(wxSize(number?100:180,-1)));
+                grid->Add(control,0,kind==Kind::LocalizedText?wxEXPAND:0);
             } else box->Add(control,0,wxEXPAND|wxALL,5);
         }
         rows_.push_back({std::move(field),std::move(label),kind,control,std::move(fieldType),std::move(defaultValue)});
@@ -111,7 +115,12 @@ void BlueprintPanel::buildProperties(std::uint16_t type) {
         for(const auto* key:{"Active","Positional","Looping","Random","RandomPosition"})add(key,key,Kind::Flag);
         add("Volume","Volume");add("VolumeVrtn","Volume variation");add("MinDistance","Minimum distance");add("MaxDistance","Maximum distance");add("Interval","Interval");add("IntervalVrtn","Interval variation");add("PitchVariation","Pitch variation");add("RandomRangeX","Random range X");add("RandomRangeY","Random range Y");
     }
-    if(type==2051) {add("BuySellFlag","Shop pages",Kind::StoreMode,"BYTE");add("MarkUp","Buy markup (%)",Kind::Value,"INT","0");add("MarkDown","Sell markdown (%)",Kind::Value,"INT","0");}
+    if(type==2051) {
+        add("BuySellFlag","Shop pages",Kind::StoreMode,"BYTE");
+        prices=new wxWrapSizer(wxHORIZONTAL,wxREMOVE_LEADING_SPACES);box->Add(prices,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
+        add("MarkUp","Buy markup (%)",Kind::Value,"INT","0");add("MarkDown","Sell markdown (%)",Kind::Value,"INT","0");prices=nullptr;
+        grid=new wxFlexGridSizer(2,FromDIP(6),FromDIP(8));grid->AddGrowableCol(1);box->Add(grid,0,wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM,6);
+    }
     if(type==2025) {loc("Description","Unidentified description");loc("DescIdentified","Identified description");add("BaseItem","Base item row");add("StackSize","Stack size");add("ModelVariation","Model variation");add("TextureVar","Texture variation");add("AddCost","Additional cost");add("Plot","Plot",Kind::Flag);}
     if(type==2042)add("Conversation","Conversation");
     std::vector<std::string> scripts;
