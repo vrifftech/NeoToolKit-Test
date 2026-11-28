@@ -60,12 +60,13 @@ void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver
     std::map<std::string,ItemData> templates;std::vector<Item> pending;
     if(const auto* list=field<GffList>(store,"ItemList"))for(std::size_t i=0;i<list->count();++i) {
         const auto& record=*list->GetStruct(i);const auto name=neomdl::resourceKey(string(record,"InventoryRes"));
+        if(name.empty())throw std::runtime_error("ItemList\\"+std::to_string(i)+" has no InventoryRes. UTM starting stock must reference a UTI; saved item data belongs to a GIT store.");
         auto item=templates.find(name);
         if(item==templates.end()) {
             const auto resource=resolver_(name,2025).value();
             GffFile file;file.LoadBytes(resource.bytes);item=templates.emplace(name,reader_->read(*file.root())).first;
         }
-        Item row;static_cast<ItemData&>(row)=item->second;row.sources={i};row.infinite=(byte(record,"Infinite")&1)!=0;
+        Item row;static_cast<ItemData&>(row)=item->second;row.sources={i};row.infinite=byte(record,"Infinite")!=0;
         if(!row.plot)texture(row.icon);
         pending.push_back(std::move(row));
     }
@@ -82,7 +83,13 @@ void ShopPreview::setStore(const GffStruct& store,const neomdl::ResourceResolver
         }
         if(!absorbed)items_.push_back(std::move(incoming));
     }
-    std::stable_sort(items_.begin(),items_.end(),[](const auto& a,const auto& b){return a.group<b.group;});Refresh();
+    std::stable_sort(items_.begin(),items_.end(),[](const auto& a,const auto& b){return a.group<b.group;});
+    const auto selectedItem=std::find_if(items_.begin(),items_.end(),[&](const auto& item){return !item.plot&&std::find(item.sources.begin(),item.sources.end(),std::size_t(selection_))!=item.sources.end();});
+    if(selectedItem==items_.end()) {
+        const auto first=std::find_if(items_.begin(),items_.end(),[](const auto& item){return !item.plot;});
+        if(first!=items_.end()) {selection_=int(first->sources.front());selected_(first->sources.front());}
+    }
+    Refresh();
 }
 void ShopPreview::stamp(wxGraphicsContext& dc,const std::string& name,const Rect& rect,const neomdl::model::Vec3& tint,double alpha,int turn,bool flipX,bool flipY) {
     renderer_.stamp(dc,name,rect,{tint.x,tint.y,tint.z},alpha,turn,flipX,flipY);
@@ -123,10 +130,10 @@ void ShopPreview::paint(wxPaintEvent&) {
                     const auto* frame=k1?(item.stack>=100?"lbl_hex_7":item.stack>=2?"lbl_hex_6":"lbl_hex_3"):(item.stack>=100?"UIBIT_EQP_ITM3":item.stack>=2?"UIBIT_EQP_ITM2":"UIBIT_EQP_ITM1");
                     stamp(*dc,frame,icon,tint);stamp(*dc,item.icon,icon,{1,1,1});text(*dc,fontStyle,item.name,content,fontScale_,highlight?tint:color(fontStyle));
                     if(item.stack>=2) {
-                        const auto countTint=k1?neomdl::model::Vec3{0,0.66f,0.98f}:color(fontStyle);const double width=item.stack>=100?55:21;
-                        GffStruct count;count.AddField(std::make_unique<GffResRefField>("FONT","fnt_d16x16"));count.AddField(std::make_unique<GffPositionField>("COLOR",countTint.x,countTint.y,countTint.z));count.AddField(std::make_unique<GffIntField>("ALIGNMENT",k1||item.stack>=100?36:34));
-                        const Rect countRect=k1?Rect(icon.m_x,icon.m_y+32*unit,rowHeight-(item.stack>=10?2:1)*unit,24*unit):Rect(icon.GetRight()-width,icon.m_y+17,width+1,20);
-                        text(*dc,count,std::to_string(item.stack),countRect,unit);
+                        const auto countTint=k1?neomdl::model::Vec3{0,0.66f,0.98f}:color(fontStyle);const double width=(item.stack>=100?(k1?42:55):21)*unit,height=19*unit;
+                        GffStruct count;count.AddField(std::make_unique<GffResRefField>("FONT","fnt_d16x16"));count.AddField(std::make_unique<GffPositionField>("COLOR",countTint.x,countTint.y,countTint.z));count.AddField(std::make_unique<GffIntField>("ALIGNMENT",!k1&&item.stack>=100?36:34));
+                        const Rect countRect(icon.GetRight()-width,icon.GetBottom()-height,width,height);
+                        text(*dc,count,std::to_string(item.stack),countRect,fontScale_);
                     }
                     hits_.push_back({row,item.sources.front()});y+=height+pad;
                 }

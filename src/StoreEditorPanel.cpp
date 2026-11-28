@@ -43,6 +43,7 @@ public:
         BlueprintPanel::Actions actions;
         actions.sourceNote="";actions.saveLabel="Save UTM";
         actions.fields=[this]{tabs_->SetSelection(1);};actions.save=[this]{save();};
+        actions.stockFields=[this](std::size_t index){tabs_->SetSelection(1);fields_->selectField("ItemList\\"+std::to_string(index));};
         actions.edit=[this](const auto& path,const auto& type,const auto& value,const auto&){editBlueprintField(*fields_->activeModel(),path,type,value);edited();};
         actions.addItem=[this](neoshared::ResourceDocument item,const neomdl::ResourceResolver&) {
             auto& root=*fields_->activeModel()->gff().root();
@@ -56,10 +57,10 @@ public:
         actions.stock=[this](BlueprintPanel::StockAction action,std::size_t index,bool enabled) {
             auto& list=static_cast<neogff::GffList&>(*fields_->activeModel()->gff().root()->GetFieldByLabel("ItemList"));
             if(action==BlueprintPanel::StockAction::Remove)list.allStructs().erase(list.allStructs().begin()+index);
-            else if(action==BlueprintPanel::StockAction::Duplicate) {auto copy=list.GetStruct(index)->Clone();list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));}
+            else if(action==BlueprintPanel::StockAction::Duplicate) {auto copy=list.GetStruct(index)->Clone();auto& item=static_cast<neogff::GffStruct&>(*copy);if(item.GetFieldByLabel("ObjectId"))item.DeleteField("ObjectId");list.AddStruct(static_cast<neogff::GffStruct*>(copy.release()));}
             else {
                 auto& item=*list.GetStruct(index);auto* flag=static_cast<neogff::GffByteField*>(item.GetFieldByLabel("Infinite"));
-                if(flag)flag->value=std::uint8_t((flag->value&~1u)|(enabled?1u:0u));
+                if(flag)flag->value=enabled?1:0;
                 else item.AddField(std::make_unique<neogff::GffByteField>("Infinite",enabled?1:0));
             }
             edited();

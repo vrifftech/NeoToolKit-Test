@@ -11,7 +11,6 @@ class wxChoice;
 class wxListCtrl;
 class wxCheckBox;
 class wxTextCtrl;
-class wxComboBox;
 class wxStaticText;
 class wxScrolledWindow;
 class wxSplitterWindow;
@@ -26,6 +25,7 @@ public:
         std::function<void(const std::string&,const std::string&,const std::string&,const std::string&)> edit;
         std::function<void(neoshared::ResourceDocument,const neomdl::ResourceResolver&)> addItem;
         std::function<void(StockAction,std::size_t,bool)> stock;
+        std::function<void(std::size_t)> stockFields;
         std::function<void(const std::string&,std::uint16_t)> itemFields;
         std::function<void()> fields,save,package,undo,redo;
         std::string saveLabel="Save resources...";
@@ -43,7 +43,7 @@ public:
     void selectInventory(std::size_t index);
 private:
     enum class Kind {Value,Flag,LocalizedText,LocalizedRef,StoreMode};
-    struct Row {std::string field,label;Kind kind;wxWindow* control;};
+    struct Row {std::string field,label;Kind kind;wxWindow* control;std::string fieldType,defaultValue;};
     void buildProperties(std::uint16_t type);
     bool commit(std::size_t index);
     void selectStock(int index);
@@ -62,11 +62,10 @@ private:
     wxScrolledWindow* properties_{};
     wxPanel* stockPage_{};wxPanel* previewPage_{};
     wxListCtrl* stock_{};wxCheckBox* infinite_{};
-    wxComboBox* layout_{};
     ShopPreview* preview_{};
-    wxNotebook* previews_{};ItemPreview* itemPreview_{};
+    wxPanel* previews_{};ItemPreview* itemPreview_{};
     ObjectEditor* object_{};
-    wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* loadPreview_{};
+    wxButton* add_{};wxButton* duplicate_{};wxButton* remove_{};wxButton* itemFields_{};wxButton* stockFields_{};
     wxButton* save_{};wxButton* undo_{};wxButton* redo_{};wxSplitterWindow* split_{};
 };
 

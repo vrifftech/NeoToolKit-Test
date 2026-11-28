@@ -13,7 +13,7 @@
 #include <utility>
 namespace neotoolkit {
 namespace {
-enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ToggleExplorer, ID_Open, ID_OpenLiveModule, ID_SetModFolder, ID_RefreshModFolder, ID_ClearModFolder, ID_ModFolderPath, ID_CloseEditor };
+enum { ID_Exit=wxID_HIGHEST+20000, ID_About, ID_Dark, ID_FontLarger, ID_FontSmaller, ID_FontReset, ID_ShowBrowser, ID_Open, ID_OpenLiveModule, ID_SetModFolder, ID_RefreshModFolder, ID_ClearModFolder, ID_ModFolderPath, ID_CloseEditor };
 class DropTarget final: public wxFileDropTarget {
 public:
     explicit DropTarget(WorkspaceFrame& frame):frame_(frame){}
@@ -53,16 +53,14 @@ void normalizeResourceTypeForEditor(neoshared::ResourceDocument& resource) {
 std::array<neomodules::Panel*,kEditorCount> WorkspaceFrame::panels() const {return {tables_,soundsets_,talkTables_,structured_,dialogues_,journals_,models_,textures_,archives_,modules_,guis_,items_,placeables_,creatures_,stores_};}
 WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Game Explorer") {
     static_assert(neomodules::kPanelApiVersion >= 4, "Update NeoShared: owned resource resolver snapshots required");
-    splitter_=new wxSplitterWindow(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE);
+    editors_=new wxNotebook(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxNB_LEFT|wxNB_MULTILINE);
+    editors_->SetName("NeoToolKit panels");
     neomodules::Context browserContext;
     browserContext.embedded=true;browserContext.compact=false;
     browserContext.closeRequested=[this]{Close();};
     browserContext.titleChanged=[this](const wxString& title){resourceSession_.reset();resourceResolvers_.clear();browserTitle_=title;if(activeEditor_==kEditorCount)SetTitle("NeoToolKit Test - "+title);};
-    browser_=neobif::ui::createBrowserPanel(splitter_,std::move(browserContext));
-    editors_=new wxAuiNotebook(splitter_,wxID_ANY,wxDefaultPosition,wxDefaultSize,
-        wxAUI_NB_TOP|wxAUI_NB_TAB_MOVE|wxAUI_NB_SCROLL_BUTTONS);
-    editors_->SetName("NeoToolKit editors");
-    editors_->Hide();
+    browser_=neobif::ui::createBrowserPanel(editors_,std::move(browserContext));
+    editors_->AddPage(browser_,"NeoBIF",true);
     browser_->setArchiveOpenHandler([this](const auto& path,auto inputs){
         ensureEditor(EditorKind::Archives);
         const auto replacement=modFolder_?modFolder_->archive(path):std::nullopt;
@@ -87,22 +85,17 @@ WorkspaceFrame::WorkspaceFrame():wxFrame(nullptr,wxID_ANY,"NeoToolKit Test - Gam
             for(const auto& choice:editorsForExtension(extension))result.push_back({choice.id,choice.label});
             return result;
         }});
-    splitter_->SetMinimumPaneSize(FromDIP(260));
-    splitter_->Initialize(browser_);
-    auto* layout=new wxBoxSizer(wxVERTICAL);layout->Add(splitter_,1,wxEXPAND);SetSizer(layout);
+    auto* layout=new wxBoxSizer(wxVERTICAL);layout->Add(editors_,1,wxEXPAND);SetSizer(layout);
     buildMenus();
-    editors_->Bind(wxEVT_AUINOTEBOOK_PAGE_CHANGED,[this](wxAuiNotebookEvent& event){
+    editors_->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED,[this](wxBookCtrlEvent& event){
         if(event.GetEventObject()==editors_ && event.GetSelection()>=0) {
             const auto index=editorForPage(event.GetSelection());
-            if(index<kEditorCount)switchMenus(index);
+            if(index<kEditorCount)switchMenus(index);else showBrowser();
         }
         event.Skip();
     });
-    editors_->Bind(wxEVT_AUINOTEBOOK_PAGE_CLOSE,[this](wxAuiNotebookEvent& event){
-        event.Veto();
-        closeEditorPage(event.GetSelection());
-    });
     Bind(wxEVT_MENU,[this](wxCommandEvent& event){
+        if(browser_->ownsCommand(event.GetId()))showBrowser();
         std::vector<neomodules::Panel*> targets{browser_};
         if(activeEditor_<kEditorCount)targets.push_back(panelFor(static_cast<EditorKind>(activeEditor_)));
         if(!neomodules::routeCommand(targets,event))event.Skip();
@@ -312,7 +305,7 @@ void WorkspaceFrame::buildMenus() {
     file->AppendSeparator();file->Append(ID_Exit,"Exit\tCtrl+Q");
     bar->Append(file,"&File");bar->Append(explorer,"Game &Explorer");
     auto* workspace=new wxMenu;
-    workspace->AppendCheckItem(ID_ToggleExplorer,"Show Game Explorer")->Check(true);
+    workspace->Append(ID_ShowBrowser,"Show NeoBIF browser");
     workspace->Append(ID_CloseEditor,"Close editor and all its documents...")->Enable(false);
     workspace->AppendSeparator();workspace->AppendCheckItem(ID_Dark,"Dark mode");
     workspace->Append(ID_FontLarger,"Increase font size\tCtrl++");
@@ -320,7 +313,7 @@ void WorkspaceFrame::buildMenus() {
     workspace->Append(ID_FontReset,"Reset font size\tCtrl+0");
     workspace->AppendSeparator();workspace->Append(ID_About,"About NeoToolKit Test");
     bar->Append(workspace,"&Workspace");SetMenuBar(bar);menusReady_=true;
-    bar->Enable(ID_ToggleExplorer,false);
+    bar->Enable(ID_ShowBrowser,false);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){Close();},ID_Exit);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){closeEditorPage(editors_->GetSelection());},ID_CloseEditor);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){
@@ -346,7 +339,7 @@ void WorkspaceFrame::buildMenus() {
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontLarger);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::steppedFontScale(fontScale_,-1);settings_.setFontScale(fontScale_);applyAppearance();},ID_FontSmaller);
     Bind(wxEVT_MENU,[this](wxCommandEvent&){fontScale_=neoview::kDefaultFontScale;settings_.setFontScale(fontScale_);applyAppearance();},ID_FontReset);
-    Bind(wxEVT_MENU,[this](wxCommandEvent& event){setExplorerVisible(event.IsChecked());},ID_ToggleExplorer);
+    Bind(wxEVT_MENU,[this](wxCommandEvent&){showBrowser();},ID_ShowBrowser);
 }
 void WorkspaceFrame::captureEditorMenus(std::size_t index) {
     if(index>=kEditorCount)return;
@@ -393,6 +386,7 @@ void WorkspaceFrame::switchMenus(std::size_t index) {
     for(std::size_t i=0;i<menus_[index].size();++i)bar->Insert(2+i,menus_[index][i].menu.release(),menus_[index][i].title);
     attachedMenuCount_=menus_[index].size();bar->Refresh();
     bar->Enable(ID_CloseEditor,true);
+    bar->Enable(ID_ShowBrowser,true);
     bar->SetLabel(ID_CloseEditor,"Close "+wxString::FromUTF8(kEditorPageTitles[index])+" and all its documents...");
     SetTitle("NeoToolKit Test - "+(editorTitles_[index].empty()?wxString::FromUTF8(kEditorPageTitles[index]):editorTitles_[index]));
 }
@@ -499,14 +493,6 @@ void WorkspaceFrame::showEditor(EditorKind kind) {
         panel->Show();
         if(!editors_->AddPage(panel,wxString::FromUTF8(kEditorPageTitles[index]),false)) {panel->Hide();return;}
         page=editorPage(kind);
-        editors_->SetPageToolTip(page,"Editor selector. Close individual files using the document tabs inside this editor.");
-    }
-    editors_->Show();
-    auto* bar=GetMenuBar();
-    if(bar)bar->Enable(ID_ToggleExplorer,true);
-    if(!splitter_->IsSplit() && browser_->IsShown()) {
-        splitter_->SplitVertically(browser_,editors_,FromDIP(520));
-        splitter_->SetSashGravity(0.0);
     }
     if(page!=wxNOT_FOUND)editors_->ChangeSelection(page);
     switchMenus(index);
@@ -525,54 +511,15 @@ bool WorkspaceFrame::closeEditorPage(int page) {
         return false;
     }
     destroyEditor(kind);
-    if(editors_->GetPageCount()==0) {
-        showBrowserOnly();
-    } else {
-        int selection=editors_->GetSelection();
-        if(selection==wxNOT_FOUND) {
-            const auto replacement=std::min(static_cast<std::size_t>(std::max(page,0)),editors_->GetPageCount()-1);
-            editors_->ChangeSelection(replacement);selection=static_cast<int>(replacement);
-        }
-        const auto next=editorForPage(selection);
-        if(next<kEditorCount)switchMenus(next);
-        auto* bar=GetMenuBar();if(bar)bar->Enable(ID_ToggleExplorer,true);
-        editors_->Show();
-    }
+    const auto next=editorForPage(editors_->GetSelection());
+    if(next<kEditorCount)switchMenus(next);else showBrowser();
     Layout();return true;
 }
-void WorkspaceFrame::showBrowserOnly() {
+void WorkspaceFrame::showBrowser() {
     detachActiveMenus();
     GetMenuBar()->Enable(ID_CloseEditor,false);SetTitle("NeoToolKit Test - "+browserTitle_);
-    browser_->Show();
-    if(splitter_->IsSplit()) {
-        splitter_->Unsplit(editors_);
-    } else if(splitter_->GetWindow1()==editors_ || splitter_->GetWindow2()==editors_) {
-        splitter_->ReplaceWindow(editors_,browser_);
-    } else if(splitter_->GetWindow1()==nullptr && splitter_->GetWindow2()==nullptr) {
-        splitter_->Initialize(browser_);
-    }
-    editors_->Hide();
-    auto* bar=GetMenuBar();
-    if(bar) {bar->Check(ID_ToggleExplorer,true);bar->Enable(ID_ToggleExplorer,false);}
-    Layout();
-}
-void WorkspaceFrame::setExplorerVisible(bool visible) {
-    auto* bar=GetMenuBar();
-    if(activeEditor_>=kEditorCount) {
-        if(bar)bar->Check(ID_ToggleExplorer,true);
-        return;
-    }
-    if(visible) {
-        browser_->Show();editors_->Show();
-        if(!splitter_->IsSplit()) {
-            splitter_->SplitVertically(browser_,editors_,FromDIP(520));
-            splitter_->SetSashGravity(0.0);
-        }
-    } else {
-        if(splitter_->IsSplit())splitter_->Unsplit(browser_);
-        browser_->Hide();editors_->Show();
-    }
-    if(bar)bar->Check(ID_ToggleExplorer,visible);
+    GetMenuBar()->Enable(ID_ShowBrowser,false);
+    editors_->ChangeSelection(0);
     Layout();
 }
 void WorkspaceFrame::selectEditor(std::size_t index) {
@@ -650,7 +597,7 @@ void WorkspaceFrame::openPath(const std::filesystem::path& input,const std::stri
         std::error_code ec;
         if(ext==".key"||std::filesystem::is_directory(path,ec)) {
             if(!editor.empty())throw std::runtime_error("Choose a resource inside the game browser, not an editor for a KEY/directory.");
-            browser_->openPath(path);return;
+            showBrowser();browser_->openPath(path);return;
         }
         if(installed&&modFolder_&&!neoerf::isArchiveExtension(ext))
             if(const auto type=neoshared::bif::resourceTypeFromExtension(ext,neoshared::bif::GameProfile::KotOR))

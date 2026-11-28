@@ -18,8 +18,7 @@
 #include "NeoSettings.hpp"
 #include <neoshared/bif/ModFolder.hpp>
 #include "core/GameResourceSession.hpp"
-#include <wx/splitter.h>
-#include <wx/aui/auibook.h>
+#include <wx/notebook.h>
 #include <array>
 #include <memory>
 #include <vector>
@@ -46,8 +45,7 @@ private:
     void switchMenus(std::size_t index);
     void showEditor(EditorKind kind);
     bool closeEditorPage(int page);
-    void showBrowserOnly();
-    void setExplorerVisible(bool visible);
+    void showBrowser();
     neomodules::Panel* ensureEditor(EditorKind kind);
     void destroyEditor(EditorKind kind);
     neomodules::Panel* panelFor(EditorKind kind) const;
@@ -76,8 +74,7 @@ private:
     ObjectEditorPanel* placeables_{};
     ObjectEditorPanel* creatures_{};
     StoreEditorPanel* stores_{};
-    wxSplitterWindow* splitter_{};
-    wxAuiNotebook* editors_{};
+    wxNotebook* editors_{};
     std::array<std::vector<Menu>,kEditorCount> menus_;
     std::array<std::vector<std::unique_ptr<wxMenu>>,kEditorCount> hiddenMenus_;
     std::size_t activeEditor_=kEditorCount;
