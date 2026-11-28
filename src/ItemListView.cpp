@@ -62,7 +62,7 @@ const std::string& ItemListView::itemName(const std::string& resref) {return rea
 long ItemListView::appendItem(const std::string& resref,bool infinite) {
     const auto& item=read(resref);
     const auto row=InsertItem(GetItemCount(),wxui::toWx(item.error.empty()?item.data.name:"[Item error] "+resref),item.image);
-    SetItem(row,1,infinite?"Infinite":item.error.empty()?wxString::Format("%u",item.data.stack):wxString{});
+    SetItem(row,1,infinite?wxString("Infinite"):item.error.empty()?wxString::Format("%u",item.data.stack):wxString{});
     if(!stock_)SetItem(row,2,wxui::toWx(resref));
     return row;
 }
